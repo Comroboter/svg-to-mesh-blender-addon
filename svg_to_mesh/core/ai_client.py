@@ -62,6 +62,21 @@ Regions lying inside another region should usually end above or below that regio
 Several regions can have the same color: they are separate parts of that color (for example a mustache and the outlines). Judge every part on its own.
 Use the preview images to understand what the regions depict. Give one entry for every region id, and keep each reason short (under 15 words)."""
 
+SYSTEM_PROMPT_FLAT = """You help turn flat 2D artwork (logos, icons, emblems) into 3D relief models in Blender.
+
+Every colored region of the artwork is a separate extruded mesh object, and all of them stand on the same ground plane: their bottoms are always at 0. For each region you only choose its height: its thickness in multiples of the base depth D (1.0 = D). A thicker region sticks out further, a thinner one looks recessed.
+
+Aim for a 3D version that reads well and looks intentional:
+- backgrounds, frames and large plates are a solid but moderate foundation,
+- the main subject and text are thicker than what surrounds them,
+- small details (highlights, eyes, snow caps, icons) are a bit thicker than the region around them,
+- things that read as cut into a surface (rivers, grooves, engraved lines, shadows) are thinner than their surroundings,
+- keep the steps between neighbouring regions moderate (about 0.3 to 1.5 D) unless the design needs drama.
+
+Regions lying inside another region should be thicker or thinner than it, never exactly the same.
+Several regions can have the same color: they are separate parts of that color (for example a mustache and the outlines). Judge every part on its own.
+Use the preview images to understand what the regions depict. Give one entry for every region id, and keep each reason short (under 15 words)."""
+
 RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -86,6 +101,29 @@ RESPONSE_SCHEMA = {
 }
 
 
+RESPONSE_SCHEMA_FLAT = {
+    "type": "object",
+    "properties": {
+        "regions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "integer"},
+                    "height": {"type": "number"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["id", "height", "reason"],
+                "additionalProperties": False,
+            },
+        },
+        "summary": {"type": "string"},
+    },
+    "required": ["regions", "summary"],
+    "additionalProperties": False,
+}
+
+
 class AIError(Exception):
     """A user-facing error message (no traceback needed)."""
 
@@ -98,7 +136,7 @@ class Request:
     headers: dict = field(default_factory=dict)
 
 
-def _prompt_text(regions, hint, with_map):
+def _prompt_text(regions, hint, with_map, flat_bottom=True):
     lines = [
         "The first image shows the artwork from above (gray = empty space). "
         "Pixel coordinates start at the top left.",
@@ -112,7 +150,8 @@ def _prompt_text(regions, hint, with_map):
     ]
     if hint.strip():
         lines.append("What the user wants to make: " + hint.strip())
-    lines.append("Suggest height and base for every region.")
+    lines.append("Suggest the height (thickness) of every region." if flat_bottom
+                 else "Suggest height and base for every region.")
     return "\n".join(lines)
 
 
@@ -120,16 +159,20 @@ def _b64(png):
     return base64.b64encode(png).decode("ascii")
 
 
-def build_request(regions, images, hint="", model=None, provider="ANTHROPIC", base_url=""):
+def build_request(regions, images, hint="", model=None, provider="ANTHROPIC", base_url="", flat_bottom=True):
     """Return a Request (without credentials) for the chosen provider.
 
     regions: list of dicts with at least ``id``, ``color`` and ``area_percent``
     (plus optional ``name``, ``bbox_px``, ``layer``, ``map_color``).
     images: PNG bytes of the preview, optionally followed by the region map.
+    flat_bottom: all regions start on the ground plane, only their thickness
+    is chosen (otherwise the AI may also lift or sink regions).
     """
     if isinstance(images, (bytes, bytearray)):
         images = [images]
-    text = _prompt_text(regions, hint, len(images) > 1)
+    text = _prompt_text(regions, hint, len(images) > 1, flat_bottom)
+    system = SYSTEM_PROMPT_FLAT if flat_bottom else SYSTEM_PROMPT
+    schema = RESPONSE_SCHEMA_FLAT if flat_bottom else RESPONSE_SCHEMA
     model = model or DEFAULT_MODELS.get(provider, "")
     base = (base_url or DEFAULT_URLS.get(provider, "")).rstrip("/")
     headers = {"content-type": "application/json"}
@@ -139,9 +182,9 @@ def build_request(regions, images, hint="", model=None, provider="ANTHROPIC", ba
         content += [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + _b64(png)}} for png in images]
         body = {
             "model": model,
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": content}],
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
             "response_format": {"type": "json_schema", "json_schema": {
-                "name": "depth_suggestions", "strict": True, "schema": RESPONSE_SCHEMA}},
+                "name": "depth_suggestions", "strict": True, "schema": schema}},
         }
         # the official API wants max_completion_tokens, most compatible servers max_tokens
         official = urllib.parse.urlsplit(base).hostname == "api.openai.com"
@@ -152,10 +195,10 @@ def build_request(regions, images, hint="", model=None, provider="ANTHROPIC", ba
         body = {
             "model": model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system},
                 {"role": "user", "content": text, "images": [_b64(png) for png in images]},
             ],
-            "format": RESPONSE_SCHEMA,
+            "format": schema,
             "stream": False,
             "options": {"temperature": 0.2},
         }
@@ -167,9 +210,9 @@ def build_request(regions, images, hint="", model=None, provider="ANTHROPIC", ba
     body = {
         "model": model,
         "max_tokens": 16000,
-        "system": SYSTEM_PROMPT,
+        "system": system,
         "messages": [{"role": "user", "content": content}],
-        "output_config": {"format": {"type": "json_schema", "schema": RESPONSE_SCHEMA}},
+        "output_config": {"format": {"type": "json_schema", "schema": schema}},
     }
     headers["anthropic-version"] = API_VERSION
     if model.startswith(("claude-opus-5", "claude-sonnet-5")):
@@ -202,10 +245,11 @@ def response_text(data, provider="ANTHROPIC"):
     return next((b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"), "")
 
 
-def parse_response(data, region_ids, provider="ANTHROPIC"):
+def parse_response(data, region_ids, provider="ANTHROPIC", flat_bottom=False):
     """Validate an API response and return (suggestions, summary).
 
-    suggestions: {region id: (height, base, reason)}, clamped to sane ranges.
+    suggestions: {region id: (height, base, reason)}, clamped to sane ranges;
+    base is 0 with *flat_bottom* (or when the answer has none).
     """
     text = response_text(data, provider).strip()
     if text.startswith("```"):  # some local models wrap JSON in a code fence
@@ -222,7 +266,7 @@ def parse_response(data, region_ids, provider="ANTHROPIC"):
         try:
             rid = int(entry["id"])
             height = float(entry["height"])
-            base = float(entry["base"])
+            base = 0.0 if flat_bottom else float(entry.get("base", 0.0))
         except (KeyError, TypeError, ValueError):
             continue
         if rid not in region_ids:

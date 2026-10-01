@@ -369,3 +369,33 @@ def test_white_hole_background_through_letter_holes():
     assert len(objs) == 1
     # the background shows through the hole of the "O": it stays a hole
     assert check_solid(objs[0])[0] == pytest.approx((0.36 - 0.04) * 0.1, rel=1e-4)
+
+
+def bottom_z(obj):
+    return min((obj.matrix_world @ v.co).z for v in obj.data.vertices)
+
+
+def test_ai_same_bottom_only_changes_thickness(monkeypatch):
+    from svg_to_mesh.core import ai_client
+
+    def fake_call(request, key="", **kw):
+        text = request.body["messages"][0]["content"][-1]["text"]
+        regions = json.loads(text[text.index("["):text.rindex("]") + 1])
+        out = [{"id": r["id"], "height": 1.0 + r["layer"], "base": 2.0, "reason": "r"} for r in regions]
+        return {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(
+            {"regions": out, "summary": "ok"})}]}
+
+    monkeypatch.setattr(ai_client, "call_api", fake_call)
+    monkeypatch.setattr(depth_ops, "online_allowed", lambda: True)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    objs = import_mountain(depth=0.03)
+    for o in objs:
+        o.select_set(True)
+    assert bpy.context.scene.svgmesh_flat_bottom  # default
+    assert bpy.ops.object.svgmesh_ai_depth(base_depth=0.02) == {"FINISHED"}
+    for o in objs:
+        assert bottom_z(o) == pytest.approx(0.0, abs=1e-6)
+        assert top_z(o) == pytest.approx(0.02 * (1.0 + o["svgmesh_layer"]))
+        check_solid(o)
+    assert bpy.ops.object.svgmesh_ai_depth(base_depth=0.02, flat_bottom=False) == {"FINISHED"}
+    assert all(bottom_z(o) == pytest.approx(0.04) for o in objs)  # lifted by base 2.0

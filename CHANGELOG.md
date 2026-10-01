@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.4.1
+
+- **Same Bottom** (new, on by default): the AI suggestions and *Re-apply* keep the bottom of every object at the same height and only make objects thicker or thinner. Turn it off to let the AI also lift or sink objects as before.
+
 ## 1.4.0
 
 - **Colorful SVGs import in color by default.** The new *Objects: Auto* setting creates one object per color when the artwork has several colors, and a single object for one-color logos.

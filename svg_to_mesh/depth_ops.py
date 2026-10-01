@@ -65,6 +65,8 @@ def _redraw_sidebars(context):
 
 
 MAX_AI_REGIONS = 150
+FLAT_DESC = ("All objects start at the same bottom and only get thicker or thinner (usual for signs, "
+             "keychains and 3D prints). Off: the AI may also lift or sink objects")
 SPLIT_DESC = ("Split every selected object into its separate parts first (e.g. the mustache apart from the "
               "eyes), so each part can get its own height. Parts that touch stay together")
 
@@ -120,6 +122,7 @@ class SVGMESH_OT_reapply_depth(Operator):
 
     base_depth: FloatProperty(name="Base Depth", subtype="DISTANCE", unit="LENGTH", default=0.0, min=0.0,
                               description=BASE_DEPTH_DESC)
+    flat_bottom: BoolProperty(name="Same Bottom", default=True, description=FLAT_DESC)
 
     @classmethod
     def poll(cls, context):
@@ -127,11 +130,13 @@ class SVGMESH_OT_reapply_depth(Operator):
 
     def invoke(self, context, event):
         self.base_depth = context.scene.svgmesh_depth_unit
+        self.flat_bottom = context.scene.svgmesh_flat_bottom
         return self.execute(context)
 
     def execute(self, context):
         objs = [o for o in _selected_meshes(context) if "svgmesh_height" in o]
-        heights = {o: (o["svgmesh_height"], o.get("svgmesh_base", 0.0), o.get("svgmesh_reason", "")) for o in objs}
+        heights = {o: (o["svgmesh_height"], 0.0 if self.flat_bottom else o.get("svgmesh_base", 0.0),
+                       o.get("svgmesh_reason", "")) for o in objs}
         depth_tools.apply_heights(objs, heights, _base_depth(self, objs))
         return {"FINISHED"}
 
@@ -147,6 +152,7 @@ class SVGMESH_OT_ai_depth(Operator):
                               description=BASE_DEPTH_DESC)
     hint: StringProperty(name="Hint", default="")
     split_parts: BoolProperty(name="Split Parts First", default=False, description=SPLIT_DESC)
+    flat_bottom: BoolProperty(name="Same Bottom", default=True, description=FLAT_DESC)
 
     _timer = None
     _thread = None
@@ -176,12 +182,14 @@ class SVGMESH_OT_ai_depth(Operator):
         regions, images, ordered = depth_tools.collect_regions(objs)
         provider = prefs.get_provider(context)
         request = ai_client.build_request(regions, images, self.hint, prefs.get_model(context),
-                                          provider=provider, base_url=prefs.get_server(context))
+                                          provider=provider, base_url=prefs.get_server(context),
+                                          flat_bottom=self.flat_bottom)
         return prefs.get_api_key(context), request, ordered
 
     def _finish(self, context, data, ordered, provider):
         try:
-            suggestions, summary = ai_client.parse_response(data, set(range(1, len(ordered) + 1)), provider)
+            suggestions, summary = ai_client.parse_response(data, set(range(1, len(ordered) + 1)), provider,
+                                                            flat_bottom=self.flat_bottom)
         except ai_client.AIError as ex:
             self.report({"ERROR"}, str(ex))
             return {"CANCELLED"}
@@ -212,6 +220,7 @@ class SVGMESH_OT_ai_depth(Operator):
         self.base_depth = context.scene.svgmesh_depth_unit
         self.hint = context.scene.svgmesh_ai_hint
         self.split_parts = context.scene.svgmesh_ai_split
+        self.flat_bottom = context.scene.svgmesh_flat_bottom
         prepared = self._prepare(context)
         if prepared is None:
             return {"CANCELLED"}
@@ -322,10 +331,12 @@ def register_props():
         name="Hint", default="",
         description="Optional: what you want to make, e.g. 'keychain', 'wall sign', 'stamp'",
     )
+    bpy.types.Scene.svgmesh_flat_bottom = BoolProperty(name="Same Bottom", default=True, description=FLAT_DESC)
     bpy.types.Scene.svgmesh_ai_split = BoolProperty(name="Split Parts First", default=False, description=SPLIT_DESC)
 
 
 def unregister_props():
     del bpy.types.Scene.svgmesh_ai_split
+    del bpy.types.Scene.svgmesh_flat_bottom
     del bpy.types.Scene.svgmesh_ai_hint
     del bpy.types.Scene.svgmesh_depth_unit

@@ -75,6 +75,7 @@ class SVGMESH_PT_depth(bpy.types.Panel):
         layout = self.layout
         scene = context.scene
         layout.prop(scene, "svgmesh_depth_unit", text="Base Depth (0 = auto)")
+        layout.prop(scene, "svgmesh_flat_bottom")
         row = layout.row(align=True)
         row.operator(SVGMESH_OT_terrace.bl_idname, icon="SORTSIZE")
         row.operator(SVGMESH_OT_reapply_depth.bl_idname, text="", icon="FILE_REFRESH")

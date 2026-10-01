@@ -246,3 +246,15 @@ def test_bad_server_address():
     req = ai_client.build_request(REGIONS, [b"a"], provider="OPENAI", base_url="file:///etc")
     with pytest.raises(ai_client.AIError, match="http"):
         ai_client.call_api(req, "k")
+
+
+def test_same_bottom_mode_asks_only_for_thickness():
+    flat = ai_client.build_request(REGIONS, [b"a"])
+    schema = flat.body["output_config"]["format"]["schema"]
+    assert "base" not in schema["properties"]["regions"]["items"]["properties"]
+    assert "bottoms are always at 0" in flat.body["system"]
+    free = ai_client.build_request(REGIONS, [b"a"], flat_bottom=False)
+    assert "base" in free.body["output_config"]["format"]["schema"]["properties"]["regions"]["items"]["required"]
+    data = {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(ANSWER)}]}
+    out, _summary = ai_client.parse_response(data, {1, 2}, flat_bottom=True)
+    assert out[2][:2] == (1.0, 0.0)  # a base sent anyway is ignored
