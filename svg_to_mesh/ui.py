@@ -1,5 +1,9 @@
+import textwrap
+
 import bpy
 
+from . import prefs
+from .depth_ops import SVGMESH_OT_ai_depth, SVGMESH_OT_reapply_depth, SVGMESH_OT_terrace
 from .operators import (
     SVGMESH_OT_boolean,
     SVGMESH_OT_curves_to_mesh,
@@ -36,6 +40,42 @@ class SVGMESH_PT_panel(bpy.types.Panel):
         layout.label(text="Tip: F9 adjusts the last import", icon="INFO")
 
 
+class SVGMESH_PT_depth(bpy.types.Panel):
+    bl_label = "Depth per Object"
+    bl_idname = "SVGMESH_PT_depth"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "SVG Mesh"
+    bl_parent_id = "SVGMESH_PT_panel"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        layout.prop(scene, "svgmesh_base_depth")
+        row = layout.row(align=True)
+        row.operator(SVGMESH_OT_terrace.bl_idname, icon="SORTSIZE")
+        row.operator(SVGMESH_OT_reapply_depth.bl_idname, text="", icon="FILE_REFRESH")
+
+        box = layout.box()
+        box.label(text="AI suggestions (optional)")
+        if not prefs.get_api_key(context):
+            col = box.column(align=True)
+            col.label(text="Let Claude pick a height per color")
+            col.label(text="based on what the logo shows.")
+            box.operator("preferences.addon_show", text="Set up AI...", icon="PREFERENCES").module = __package__
+        else:
+            box.prop(scene, "svgmesh_ai_hint", text="Hint")
+            box.operator(SVGMESH_OT_ai_depth.bl_idname, icon="SHADERFX")
+        obj = context.active_object
+        reason = obj.get("svgmesh_reason") if obj is not None else None
+        if reason:
+            col = box.column(align=True)
+            col.label(text="%s: height %.2g" % (obj.name, obj.get("svgmesh_height", 0)))
+            for line in textwrap.wrap(str(reason), 36):
+                col.label(text=line)
+
+
 def menu_import(self, context):
     self.layout.operator(SVGMESH_OT_import_svg.bl_idname, text="SVG as Clean Mesh (.svg)")
     self.layout.operator(SVGMESH_OT_trace_image.bl_idname, text="Image Trace to Mesh")
@@ -45,7 +85,7 @@ def menu_convert(self, context):
     self.layout.operator(SVGMESH_OT_curves_to_mesh.bl_idname, text="Clean Mesh (from Curve/Text)")
 
 
-classes = [SVGMESH_PT_panel]
+classes = [SVGMESH_PT_panel, SVGMESH_PT_depth]
 
 if hasattr(bpy.types, "FileHandler"):  # Blender 4.1+: drag & drop .svg files
 

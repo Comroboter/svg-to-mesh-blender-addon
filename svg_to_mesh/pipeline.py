@@ -160,6 +160,10 @@ def build_objects(context, shapes, settings, name, collection=None, matrix=None)
                 col = first.color
             me.materials.append(get_material(col))
         obj = bpy.data.objects.new(obj_name, me)
+        # remembered for the "Depth per Object" tools (paint order, color)
+        obj["svgmesh_layer"] = gid
+        if first.color is not None:
+            obj["svgmesh_color"] = color_hex(first.color)
         if matrix is not None:
             obj.matrix_world = matrix
         collection.objects.link(obj)

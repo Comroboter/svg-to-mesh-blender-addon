@@ -29,6 +29,7 @@ That is bad news for booleans: the Exact solver gets slow or produces artifacts.
 | **Import SVG as Mesh** | Reads the SVG itself (paths incl. arcs, rectangles, circles, polygons, groups, transforms, CSS classes, `<use>`, strokes) and builds a mesh directly. |
 | **Trace Image to Mesh** | Vectorizes PNG/JPG/... automatically, either single-color (brightness/transparency) or multi-color (color clustering). Can also save the result as SVG. |
 | **Curves to Clean Mesh** | Converts existing curve and **text objects** (e.g. SVGs you already imported) into clean meshes. |
+| **Depth per object** | Gives every color its own height: stacked by paint order, or (optional) suggested by AI based on what the logo shows. |
 | **Boolean helper** | Uses the selected objects as boolean cutters (engrave/emboss) on the active object with a single click. |
 
 ### Clean geometry
@@ -66,6 +67,15 @@ Outlines (`stroke`) are turned into real geometry with the correct width, line c
 ![Logo engraved into a block (left) and embossed onto a block (right)](docs/boolean.png)
 
 The extruded meshes are closed solids, so the Exact boolean solver handles them reliably. The sidebar has one-click **Cut** (engrave) and **Add** (emboss) buttons.
+
+### Depth per object (optional AI suggestions)
+
+The collapsed **Depth per Object** section in the sidebar gives every selected object its own height (import with *Objects: Per Color* or *Per Shape* first):
+
+- **Terrace by Order**: each layer stands on the ground and is a bit higher than the one below it, as in the image at the top. No AI, no internet.
+- **Suggest with AI** (optional): Claude (Anthropic) looks at a small preview of the selected objects and suggests a height and a base level for each of them, e.g. sky low, mountains higher, snow caps on top, a river cut into the land. An optional hint such as "keychain", "wall sign" or "stamp" steers the result. The reason for each height is shown for the active object, and **Re-apply** rescales everything to a new base depth.
+
+To use the AI suggestions, open *Edit > Preferences > Add-ons > SVG to Clean Mesh*, paste an Anthropic API key (or set the `ANTHROPIC_API_KEY` environment variable) and pick a model; Blender's *Allow Online Access* (Preferences > System > Network) must be enabled. Nothing is sent unless you press *Suggest with AI*. Each request sends a small preview image of the selected objects, their colors, names and sizes, and your hint; it is billed to your Anthropic account (typically a few cents).
 
 ### Image -> vector -> mesh
 

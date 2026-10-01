@@ -414,9 +414,9 @@ def render_hero():
     setup_render(1200, 680, 128)
     objs = import_svg(os.path.join(EXAMPLES, "mountain_logo.svg"), separate="COLOR", depth=0.03,
                       ignore_white=False, target_size=1.0, origin="CENTER")
-    for i, o in enumerate(objs):
-        for v in o.data.vertices:  # every color a bit higher than the one below it
-            v.co.z *= 1.0 + 0.7 * i
+    # every color a bit higher than the one below it ("Terrace by Order" in the sidebar)
+    bpy.ops.object.svgmesh_terrace(base_depth=0.03, step=0.7)
+    for o in objs:
         add_bevel(o, 0.002)
         mat = o.data.materials[0]
         mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.4
