@@ -103,7 +103,9 @@ The extruded meshes are closed solids, so the Exact boolean solver handles them 
 The collapsed **Depth per Object** section in the sidebar gives every selected object its own height (import with *Objects: Per Color* or *Per Shape* first):
 
 - **Terrace by Order**: each layer stands on the ground and is a bit higher than the one below it, as in the image above. No AI, no internet.
-- **Suggest with AI** (optional): Claude (Anthropic) looks at a small preview of the selected objects and suggests a height and a base level for each of them, e.g. sky low, mountains higher, snow caps on top, a river cut into the land. An optional hint such as "keychain", "wall sign" or "stamp" steers the result. The reason for each height is shown for the active object, and **Re-apply** rescales everything to a new base depth.
+- **Suggest with AI** (optional): Claude (Anthropic) looks at a small preview of the selected objects and suggests a height and a base level for each of them, e.g. sky low, mountains higher, snow caps on top, a river cut into the land. An optional hint such as "keychain", "wall sign" or "stamp" steers the result. A progress bar shows while Claude is answering (usually 10 to 40 seconds); it can be cancelled. The reason for each height is shown for the active object, and **Re-apply** rescales everything to a new base depth.
+
+*Base Depth* is the thickness that height 1.0 corresponds to. Leave it at 0 (automatic) to use the current thickness of the selected objects, also after scaling them.
 
 To use the AI suggestions, open *Edit > Preferences > Add-ons > SVG to Clean Mesh*, paste an Anthropic API key (or set the `ANTHROPIC_API_KEY` environment variable) and pick a model; Blender's *Allow Online Access* (Preferences > System > Network) must be enabled. Nothing is sent unless you press *Suggest with AI*. Each request sends a small preview image of the selected objects, their colors, names and sizes, and your hint; it is billed to your Anthropic account (typically a few cents).
 
@@ -135,6 +137,8 @@ Multi-colored images are split into one mesh per color:
 
 Tested with Blender 5.0 and 5.2 LTS. Minimum version is 3.6.
 
+**Updating:** from version 1.3.0 on, press *Check for Updates* at the bottom of the sidebar panel (or in the add-on preferences). If a newer release exists, *Install Update* downloads it from GitHub, verifies its checksum and installs it; restart Blender afterwards. The add-on never checks on its own.
+
 ## Usage
 
 The panel lives in the **3D Viewport > Sidebar (N) > "SVG Mesh" tab**. Alternatively:
@@ -163,7 +167,9 @@ The panel lives in the **3D Viewport > Sidebar (N) > "SVG Mesh" tab**. Alternati
 | Extrude / Depth / Center Depth | Thickness of the solid, optionally symmetric around Z=0 |
 | Objects | Single object / per color / per shape |
 | Overlaps | *Visible Only* (how the SVG looks) or *Union* (every shape complete) |
-| White = Hole | White areas become holes or are ignored |
+| White = Hole | White areas become holes or are ignored. Turn it off for illustrations with white parts (eyes, belly ...) |
+| Skip Effects | Leave out strongly blurred shapes (shadows, glows, highlights) |
+| Min Opacity | Leave out fills and strokes more transparent than this (shading layers) |
 | Layer Offset | Z offset between separated objects |
 | Size | Scale to a size (*Fit*) or use the real document size (*Real*, e.g. mm from the SVG) |
 | **Tracing:** Mode | Auto (detects several colors) / Brightness / Transparency / Colors |
@@ -176,7 +182,8 @@ The panel lives in the **3D Viewport > Sidebar (N) > "SVG Mesh" tab**. Alternati
 ## Limitations
 
 - SVG `<text>` is not supported. Convert text to paths first (Inkscape: *Path > Object to Path*) or use Blender text with *Curves to Clean Mesh*.
-- Gradients become the color of their first stop. `clipPath`, `mask`, filters and dashes (`stroke-dasharray`) are ignored.
+- Gradients become the average of their colors. `mask`, patterns and dashes (`stroke-dasharray`) are ignored; filters are only used to recognize soft effects (see *Skip Effects*).
+- For colorful illustrations use *Objects: Per Color* and turn off *White = Hole*.
 - Tracing is meant for logos, icons and graphics with clear color areas, not for photos.
 - Very large or deeply nested files are rejected (more than 200,000 elements after expanding `<use>`, or more than 400 nesting levels) to protect against malicious files.
 

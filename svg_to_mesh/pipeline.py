@@ -23,6 +23,8 @@ class ImportSettings:
     include_strokes: bool = True
     layer_offset: float = 0.0
     create_materials: bool = True
+    skip_effects: bool = True  # drop strongly blurred shapes (shadows, glows, sheens)
+    min_opacity: float = 0.5  # fills/strokes more transparent than this are dropped
 
 
 def is_white(color):
@@ -56,28 +58,76 @@ def get_material(color):
     return mat
 
 
+def _bbox(contours):
+    xs = [x for c in contours for x, _y in c]
+    ys = [y for c in contours for _x, y in c]
+    if not xs:
+        return None
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _visible_bbox(p):
+    """Bounding box of a PolyShape, cut down to the bounds of its clip paths."""
+    b = _bbox(p.contours)
+    for group in p.clips:
+        if b is None:
+            break
+        cb = _bbox([c for q in group for c in q.contours])
+        if cb is None:
+            return None
+        b = (max(b[0], cb[0]), max(b[1], cb[1]), min(b[2], cb[2]), min(b[3], cb[3]))
+        if b[0] >= b[2] or b[1] >= b[3]:
+            return None
+    return b
+
+
+# blur radius relative to the shape size above which a shape counts as a soft
+# effect (shadow, glow, sheen) rather than a soft-edged part of the drawing
+EFFECT_BLUR = 0.07
+
+
+def is_effect(shape):
+    blur = getattr(shape, "blur", 0.0)
+    if blur <= 0.0:
+        return False
+    b = shapes_bounds([shape])
+    return b is None or blur > EFFECT_BLUR * min(b[2] - b[0], b[3] - b[1])
+
+
+def keep_shape(shape, settings):
+    """(fill, stroke) flags: which parts of a VectorShape become geometry."""
+    if settings.skip_effects and is_effect(shape):
+        return False, False
+    fill = getattr(shape, "fill_opacity", 1.0) >= settings.min_opacity
+    stroke = settings.include_strokes and getattr(shape, "stroke_opacity", 1.0) >= settings.min_opacity
+    return fill, stroke
+
+
 def prepare_polys(shapes, settings):
     """Flatten shapes and map them into output space.
 
     Returns (polys, bounds_out, size_out).
     """
-    b = shapes_bounds(shapes)
+    kept = [(i, shape, keep_shape(shape, settings)) for i, shape in enumerate(shapes)]
+    kept = [k for k in kept if k[2][0] or k[2][1]]
+    b = shapes_bounds([shape for _i, shape, _k in kept])
     if b is None:
         return [], None, 0.0
     max_dim = max(b[2] - b[0], b[3] - b[1]) or 1.0
     tol = max_dim * max(settings.curve_tolerance, 1e-6)
 
     polys = []
-    for i, shape in enumerate(shapes):
-        for p in shape_to_polys(shape, tol, include_stroke=settings.include_strokes):
+    clip_cache = {}
+    for i, shape, (fill, stroke) in kept:
+        for p in shape_to_polys(shape, tol, include_fill=fill, include_stroke=stroke, clip_cache=clip_cache):
             p.source_index = i
             polys.append(p)
-    if not polys:
+    boxes = [bb for bb in (_visible_bbox(p) for p in polys) if bb is not None]
+    if not boxes:
         return [], None, 0.0
 
-    xs = [x for p in polys for c in p.contours for x, _y in c]
-    ys = [y for p in polys for c in p.contours for _x, y in c]
-    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+    minx, miny = min(bb[0] for bb in boxes), min(bb[1] for bb in boxes)
+    maxx, maxy = max(bb[2] for bb in boxes), max(bb[3] for bb in boxes)
     dim = max(maxx - minx, maxy - miny) or 1.0
 
     if settings.scale_mode == "FIT":
@@ -92,8 +142,18 @@ def prepare_polys(shapes, settings):
         ox, oy = minx, miny
     else:
         ox = oy = 0.0
-    for p in polys:
+
+    def move(p):
         p.contours = [[((x - ox) * s, (y - oy) * s) for x, y in c] for c in p.contours]
+
+    moved = set()  # clip groups are shared between shapes: move each one once
+    for p in polys:
+        move(p)
+        for group in p.clips:
+            if id(group) not in moved:
+                moved.add(id(group))
+                for q in group:
+                    move(q)
     bounds = ((minx - ox) * s, (miny - oy) * s, (maxx - ox) * s, (maxy - oy) * s)
     return polys, bounds, dim * s
 

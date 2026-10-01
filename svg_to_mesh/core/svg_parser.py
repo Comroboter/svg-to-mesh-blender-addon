@@ -56,7 +56,7 @@ INHERITED = (
     "fill", "fill-rule", "fill-opacity", "stroke", "stroke-width", "stroke-linecap",
     "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "visibility", "color",
 )
-STYLE_PROPS = INHERITED + ("display", "opacity")
+STYLE_PROPS = INHERITED + ("display", "opacity", "clip-path", "filter")
 
 SKIP_TAGS = {
     "defs", "clipPath", "mask", "pattern", "marker", "symbol", "style", "title",
@@ -537,6 +537,7 @@ class _Parser:
         self.ids = {}
         self.sheet = StyleSheet()
         self.gradients = {}
+        self.gradient_opacity = {}
         self.use_depth = 0
         self.visited = 0
         self.depth = 0
@@ -550,22 +551,37 @@ class _Parser:
 
     # -- gradients -> flat colour of first stop --------------------------
     def _collect_gradients(self):
-        def stops_color(el, depth=0):
+        """Reduce gradients to one color: the average of their stops weighted by
+        stop opacity, plus the average opacity (a fade to transparent counts as
+        half transparent, not as its first color)."""
+        def stops(el, depth=0):
+            found = []
             for st in el:
                 if _local(st.tag) == "stop":
                     style = parse_style_attr(st.get("style"))
-                    col = style.get("stop-color", st.get("stop-color", "black"))
-                    return parse_color(col)
+                    col = parse_color(style.get("stop-color", st.get("stop-color", "black")))
+                    op = _float(style.get("stop-opacity", st.get("stop-opacity")), 1.0)
+                    if col is not None:
+                        found.append((col, max(0.0, min(1.0, op))))
+            if found:
+                return found
             href = el.get("{http://www.w3.org/1999/xlink}href") or el.get("href")
             if href and href.startswith("#") and depth < 8 and href[1:] in self.ids:
-                return stops_color(self.ids[href[1:]], depth + 1)
-            return None
+                return stops(self.ids[href[1:]], depth + 1)
+            return []
 
         for ident, el in self.ids.items():
             if _local(el.tag) in ("linearGradient", "radialGradient"):
-                col = stops_color(el)
-                if col is not None:
-                    self.gradients[ident] = col
+                found = stops(el)
+                if not found:
+                    continue
+                total = sum(op for _c, op in found)
+                if total > 1e-6:
+                    col = tuple(sum(c[i] * op for c, op in found) / total for i in range(3))
+                else:
+                    col = tuple(sum(c[i] for c, _op in found) / len(found) for i in range(3))
+                self.gradients[ident] = col
+                self.gradient_opacity[ident] = total / len(found)
 
     # -- style resolution -----------------------------------------------
     def element_style(self, el, parent_style):
@@ -584,7 +600,51 @@ class _Parser:
                     del style[k]
         opacity = _float(style.get("opacity"), 1.0)
         style["_opacity"] = parent_style.get("_opacity", 1.0) * opacity
+        style["_clips"] = parent_style.get("_clips", ())
+        style["_blur"] = parent_style.get("_blur", 0.0)
         return style
+
+    def filter_blur(self, ref):
+        """Largest Gaussian blur radius (stdDeviation, user units) of filter *ref*."""
+        el = self.ids.get(ref)
+        if el is None or _local(el.tag) != "filter":
+            return 0.0
+        blur = 0.0
+        for child in el.iter():
+            if _local(child.tag) == "feGaussianBlur":
+                blur = max([blur] + [abs(v) for v in parse_numbers(child.get("stdDeviation"))])
+        return blur
+
+    # -- clip paths -------------------------------------------------------
+    def clip_group(self, ref, m):
+        """Shapes (in output coordinates) of the clipPath *ref*, or None."""
+        el = self.ids.get(ref)
+        if el is None or _local(el.tag) != "clipPath":
+            return None
+        if (el.get("clipPathUnits") or "userSpaceOnUse").strip() != "userSpaceOnUse":
+            return None  # objectBoundingBox clips are rare in logos: ignore them
+        cm = mat_mul(m, parse_transform(el.get("transform")))
+        group = []
+        for child in el:
+            tag = _local(child.tag)
+            target, cm2 = child, mat_mul(cm, parse_transform(child.get("transform")))
+            if tag == "use":
+                href = child.get("{http://www.w3.org/1999/xlink}href") or child.get("href")
+                target = self.ids.get(href[1:]) if href and href.startswith("#") else None
+                if target is None:
+                    continue
+                cm2 = mat_mul(cm2, (1, 0, 0, 1, parse_length(child.get("x")), parse_length(child.get("y"))))
+                cm2 = mat_mul(cm2, parse_transform(target.get("transform")))
+                tag = _local(target.tag)
+            subpaths = self.geometry(tag, target)
+            if not subpaths:
+                continue
+            style = parse_style_attr(child.get("style"))
+            rule = style.get("clip-rule", child.get("clip-rule", el.get("clip-rule", "nonzero")))
+            shape = VectorShape(subpaths=subpaths, fill=(0.0, 0.0, 0.0),
+                                fill_rule="evenodd" if str(rule).strip() == "evenodd" else "nonzero")
+            group.append(transform_shape(shape, cm2))
+        return group
 
     # -- walking ---------------------------------------------------------
     def walk(self, el, ctm, parent_style):
@@ -607,6 +667,15 @@ class _Parser:
         if style.get("display", "").strip() == "none":
             return
         m = mat_mul(ctm, parse_transform(el.get("transform")))
+        filter_ref = _url_id(style.get("filter"))
+        if filter_ref:
+            scale = abs(m[0] * m[3] - m[1] * m[2]) ** 0.5
+            style["_blur"] = max(style["_blur"], self.filter_blur(filter_ref) * scale)
+        clip_ref = _url_id(style.get("clip-path"))
+        if clip_ref:
+            group = self.clip_group(clip_ref, m)
+            if group is not None:
+                style["_clips"] = style["_clips"] + (group,)
 
         if tag == "svg" and el is not self.root:
             x = parse_length(el.get("x"))
@@ -695,10 +764,14 @@ class _Parser:
         fill = parse_color(style.get("fill", "black"), current, self.gradients)
         if tag == "line":
             fill = None
-        if fill is not None and _float(style.get("fill-opacity"), 1.0) * style["_opacity"] <= 0.001:
+        fill_op = _float(style.get("fill-opacity"), 1.0) * style["_opacity"]
+        fill_op *= self.gradient_opacity.get(_url_id(style.get("fill")), 1.0)
+        if fill is not None and fill_op <= 0.001:
             fill = None
         stroke = parse_color(style.get("stroke", "none"), current, self.gradients)
-        if stroke is not None and _float(style.get("stroke-opacity"), 1.0) * style["_opacity"] <= 0.001:
+        stroke_op = _float(style.get("stroke-opacity"), 1.0) * style["_opacity"]
+        stroke_op *= self.gradient_opacity.get(_url_id(style.get("stroke")), 1.0)
+        if stroke is not None and stroke_op <= 0.001:
             stroke = None
         if fill is None and stroke is None:
             return
@@ -712,8 +785,12 @@ class _Parser:
             linejoin=style.get("stroke-linejoin", "miter").strip(),
             miterlimit=_float(style.get("stroke-miterlimit"), 4.0),
             name=el.get("id") or el.get("{http://www.inkscape.org/namespaces/inkscape}label") or tag,
+            fill_opacity=fill_op,
+            stroke_opacity=stroke_op,
+            blur=style.get("_blur", 0.0),
         )
         transform_shape(shape, m)
+        shape.clips = style.get("_clips", ())
         self.doc.shapes.append(shape)
 
     # -- root ------------------------------------------------------------
@@ -742,6 +819,14 @@ class _Parser:
         self.walk(root, m, {"_opacity": 1.0})
         self.doc.mm_per_unit = 25.4 / 96.0
         return self.doc
+
+
+def _url_id(value):
+    """'url(#id)' -> 'id' (None otherwise)."""
+    if not value:
+        return None
+    m = re.match(r"\s*url\(\s*['\"]?#([^'\")\s]+)['\"]?\s*\)", str(value))
+    return m.group(1) if m else None
 
 
 def _float(v, default):

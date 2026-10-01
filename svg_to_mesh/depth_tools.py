@@ -126,6 +126,53 @@ def set_depth(obj, bottom, top):
     me.update()
 
 
+def world_thickness(obj):
+    zs = [(obj.matrix_world @ v.co).z for v in obj.data.vertices]
+    return (max(zs) - min(zs)) if zs else 0.0
+
+
+def world_extent(objs):
+    """Largest X/Y size of the objects together (world units)."""
+    xs, ys = [], []
+    for o in objs:
+        for v in o.data.vertices:
+            co = o.matrix_world @ v.co
+            xs.append(co.x)
+            ys.append(co.y)
+    return max(max(xs) - min(xs), max(ys) - min(ys)) if xs else 0.0
+
+
+def auto_base_depth(objs):
+    """The thickness that 'height 1.0' should mean for these objects.
+
+    Taken from their current thickness (divided by a stored height, so that
+    applying heights repeatedly keeps the same scale); flat objects get 5 %
+    of their size. This keeps the depth tools independent of object scale.
+    """
+    units = []
+    for o in objs:
+        t = world_thickness(o)
+        if t <= 1e-9:
+            continue
+        h = o.get("svgmesh_height")
+        units.append(t / h if isinstance(h, (int, float)) and h > 0 else t)
+    if units:
+        units.sort()
+        return units[len(units) // 2]
+    return 0.05 * max(world_extent(objs), 1e-6)
+
+
+def resolve_base_depth(objs, base_depth):
+    """(base depth to use, warning or None); 0 means automatic."""
+    if base_depth <= 0:
+        return auto_base_depth(objs), None
+    extent = world_extent(objs)
+    if extent > 0 and base_depth < 0.002 * extent:
+        return base_depth, ("Base Depth %.3g m is very thin for objects %.3g m wide - set it to 0 for automatic"
+                            % (base_depth, extent))
+    return base_depth, None
+
+
 def apply_heights(ordered, heights, base_depth):
     """heights: {object: (height, base, reason)} in multiples of base_depth."""
     for o in ordered:

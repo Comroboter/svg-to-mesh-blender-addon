@@ -6,6 +6,7 @@ They are skipped automatically when ``bpy`` is not importable.
 
 import json
 import os
+import time
 
 import pytest
 
@@ -90,6 +91,28 @@ def test_union_mode_keeps_shapes_whole():
     objs = build("NGON", separate="COLOR", overlap="UNION")
     vols = {o.name: check_solid(o)[0] for o in objs}
     assert vols["T #ff0000"] == pytest.approx(0.64 * 0.1, rel=1e-4)
+
+
+def test_clip_paths_effects_and_transparency():
+    from tests.test_core import ILLUSTRATION_SVG
+
+    doc = parse_svg(ILLUSTRATION_SVG)
+    keep = {"clipped", "softedge", "shadow", "sheen"}
+    doc.shapes = [s for s in doc.shapes if s.name in keep]
+    st = pipeline.ImportSettings(separate="SHAPE", depth=0.1, scale_mode="KEEP", origin="KEEP")
+    objs = pipeline.build_objects(bpy.context, doc.shapes, st, "I")
+    vols = {o.name: check_solid(o)[0] for o in objs}
+    # the shadow (blur 40 on a 200 unit shape) and the 30 % sheen are left out,
+    # the soft-edged rect (blur 1) stays and hides the clipped rect below it
+    assert list(vols) == ["I softedge"]
+    st.mesh.overlap = "UNION"
+    objs = pipeline.build_objects(bpy.context, doc.shapes, st, "U")
+    vols = {o.name: check_solid(o)[0] for o in objs}
+    assert vols["U clipped"] == pytest.approx(50 * 100 * 0.1, rel=1e-4)  # left half only
+    assert vols["U softedge"] == pytest.approx(100 * 100 * 0.1, rel=1e-4)
+    st.skip_effects, st.min_opacity = False, 0.0
+    objs = pipeline.build_objects(bpy.context, doc.shapes, st, "A")
+    assert len(objs) == 4
 
 
 def test_import_operator_and_boolean():
@@ -221,3 +244,82 @@ def test_ai_depth_respects_offline_mode():
         pytest.skip("online access is enabled in this Blender")
     with pytest.raises(RuntimeError, match="Online access is disabled"):
         bpy.ops.object.svgmesh_ai_depth()
+
+
+def _fake_ai(monkeypatch, step=0.5):
+    from svg_to_mesh.core import ai_client
+
+    def fake_call(key, headers, body, **kw):
+        text = body["messages"][0]["content"][1]["text"]
+        regions = json.loads(text[text.index("["):text.rindex("]") + 1])
+        out = [{"id": r["id"], "height": 1.0 + r["layer"] * step, "base": 0.0, "reason": "r"} for r in regions]
+        return {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(
+            {"regions": out, "summary": "ok"})}]}
+
+    monkeypatch.setattr(ai_client, "call_api", fake_call)
+    monkeypatch.setattr(depth_ops, "online_allowed", lambda: True)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+
+def test_auto_base_depth_follows_object_scale(monkeypatch):
+    """Scaled objects: 'Base Depth = 0' uses their current thickness, not a fixed value."""
+    _fake_ai(monkeypatch)
+    objs = import_mountain(depth=0.03)
+    for o in objs:
+        o.scale = (10.0, 10.0, 10.0)  # the user scales the logo up after importing
+        o.select_set(True)
+    bpy.context.view_layer.update()
+    assert bpy.context.scene.svgmesh_depth_unit == 0.0  # automatic by default
+    assert bpy.ops.object.svgmesh_ai_depth() == {"FINISHED"}  # base_depth 0 = auto
+    for o in objs:
+        check_solid(o)
+        assert top_z(o) == pytest.approx(0.3 * (1.0 + 0.5 * o["svgmesh_layer"]), rel=1e-4)
+    # applying again keeps the same scale (no creeping)
+    assert bpy.ops.object.svgmesh_ai_depth() == {"FINISHED"}
+    for o in objs:
+        assert top_z(o) == pytest.approx(0.3 * (1.0 + 0.5 * o["svgmesh_layer"]), rel=1e-4)
+
+
+def test_auto_base_depth_for_flat_objects(monkeypatch):
+    _fake_ai(monkeypatch, step=0.0)
+    objs = import_mountain(depth=0.0)
+    for o in objs:
+        o.select_set(True)
+    assert bpy.ops.object.svgmesh_terrace(step=0.0) == {"FINISHED"}
+    for o in objs:
+        check_solid(o)
+        assert top_z(o) == pytest.approx(0.05, rel=1e-3)  # 5 % of the 1 m wide logo
+
+
+def test_tiny_base_depth_warns(monkeypatch):
+    from svg_to_mesh import depth_tools
+
+    objs = import_mountain(depth=0.03)
+    value, warning = depth_tools.resolve_base_depth(objs, 0.00001)
+    assert value == 0.00001 and "very thin" in warning
+    assert depth_tools.resolve_base_depth(objs, 0.0)[1] is None
+
+
+def test_ai_progress_status():
+    depth_ops.AI_JOB.clear()
+    assert depth_ops.ai_job_status() is None
+    depth_ops.AI_JOB["start"] = 100.0
+    elapsed, factor = depth_ops.ai_job_status(now=110.0)
+    assert elapsed == pytest.approx(10.0) and 0.0 < factor < 0.95
+    assert depth_ops.ai_job_status(now=400.0)[1] == pytest.approx(0.95)
+    assert depth_ops.ai_job_status(now=100.0 + depth_ops.AI_STALE_SECONDS + 1) is None  # stale job is dropped
+    assert not depth_ops.AI_JOB
+    depth_ops.AI_JOB["start"] = time.time()
+    try:
+        assert bpy.ops.object.svgmesh_ai_cancel() == {"FINISHED"}
+        assert depth_ops.AI_JOB["cancel"]
+    finally:
+        depth_ops.AI_JOB.clear()
+
+
+def test_update_operators_are_registered():
+    from svg_to_mesh import update_ops
+
+    assert update_ops.current_version() >= (1, 3, 0)
+    assert hasattr(bpy.ops.preferences, "svgmesh_check_update")
+    assert not bpy.ops.preferences.svgmesh_install_update.poll()  # nothing checked yet

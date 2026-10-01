@@ -299,6 +299,50 @@ def test_non_finite_numbers_do_not_spoil_other_shapes():
     assert poly_area(polys) == pytest.approx(100)
 
 
+ILLUSTRATION_SVG = """<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+  <defs>
+    <clipPath id="c"><rect x="0" y="0" width="50" height="100"/></clipPath>
+    <filter id="soft"><feGaussianBlur stdDeviation="1"/></filter>
+    <filter id="big"><feGaussianBlur stdDeviation="20"/></filter>
+    <linearGradient id="fade"><stop offset="0" stop-color="#ff0000"/>
+      <stop offset="1" stop-color="#0000ff" stop-opacity="0"/></linearGradient>
+    <linearGradient id="mix"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient>
+  </defs>
+  <g clip-path="url(#c)"><rect id="clipped" width="100" height="100"/></g>
+  <rect id="softedge" width="100" height="100" filter="url(#soft)"/>
+  <rect id="shadow" width="100" height="100" filter="url(#big)" transform="scale(2)"/>
+  <rect id="faded" width="10" height="10" fill="url(#fade)"/>
+  <rect id="mixed" width="10" height="10" fill="url(#mix)"/>
+  <rect id="sheen" width="10" height="10" fill-opacity="0.3"/>
+</svg>"""
+
+
+def test_illustration_features_are_parsed():
+    shapes = {s.name: s for s in parse_svg(ILLUSTRATION_SVG).shapes}
+    clipped = shapes["clipped"]
+    assert len(clipped.clips) == 1 and len(clipped.clips[0]) == 1
+    clip_polys = shape_to_polys(clipped, 0.01)[0].clips[0]
+    assert poly_area(clip_polys) == pytest.approx(5000)
+    assert shapes["softedge"].blur == pytest.approx(1)
+    assert shapes["shadow"].blur == pytest.approx(40)  # in output units (scaled by 2)
+    # gradients: stops weighted by opacity, a fade to transparent is half transparent
+    assert shapes["faded"].fill == pytest.approx((1, 0, 0))
+    assert shapes["faded"].fill_opacity == pytest.approx(0.5)
+    assert shapes["mixed"].fill == pytest.approx((0.5, 0, 0.5))
+    assert shapes["sheen"].fill_opacity == pytest.approx(0.3)
+
+
+def test_clip_groups_are_shared_between_shapes():
+    svg = """<svg xmlns="http://www.w3.org/2000/svg">
+      <clipPath id="c"><circle r="5"/></clipPath>
+      <g clip-path="url(#c)"><rect width="9" height="9"/><rect width="3" height="3"/></g></svg>"""
+    a, b = parse_svg(svg).shapes
+    cache = {}
+    pa = shape_to_polys(a, 0.01, clip_cache=cache)[0]
+    pb = shape_to_polys(b, 0.01, clip_cache=cache)[0]
+    assert pa.clips[0] is pb.clips[0]
+
+
 def _antialiased_logo(w=160, h=48, ss=8):
     """Small transparent two-color logo, rendered with 8x supersampling (anti-aliased)."""
     yy, xx = np.mgrid[0:h * ss, 0:w * ss] / ss

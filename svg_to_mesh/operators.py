@@ -185,10 +185,25 @@ class SVGMESH_OT_import_svg(Operator, _FileImport, MeshOptions, SizeOptions):
     filename_ext = ".svg"
     filter_glob: StringProperty(default="*.svg", options={"HIDDEN"})
 
+    skip_effects: BoolProperty(
+        name="Skip Effects", default=True,
+        description="Leave out strongly blurred shapes (drop shadows, glows, soft highlights) "
+        "that would become hard blobs",
+    )
+    min_opacity: FloatProperty(
+        name="Min Opacity", subtype="FACTOR", default=0.5, min=0.0, max=1.0,
+        description="Leave out fills and strokes that are more transparent than this "
+        "(shading and highlight layers in illustrations)",
+    )
+
     def draw(self, context):
         layout = self.layout
         self.draw_size_options(layout)
         self.draw_mesh_options(layout)
+        box = layout.box()
+        box.label(text="Illustrations", icon="BRUSHES_ALL")
+        box.prop(self, "skip_effects")
+        box.prop(self, "min_opacity", slider=True)
 
     def execute(self, context):
         t0 = time.time()
@@ -207,6 +222,8 @@ class SVGMESH_OT_import_svg(Operator, _FileImport, MeshOptions, SizeOptions):
                 target_size=self.target_size,
                 unit_scale=doc.mm_per_unit / 1000.0 / context.scene.unit_settings.scale_length,
                 origin=self.origin,
+                skip_effects=self.skip_effects,
+                min_opacity=self.min_opacity,
             )
             coll = None
             if self.separate != "ONE":
@@ -217,6 +234,12 @@ class SVGMESH_OT_import_svg(Operator, _FileImport, MeshOptions, SizeOptions):
                 continue
             _place_at_cursor(context, objs)
             created.extend(objs)
+            colors = {pipeline.color_hex(s.fill) for s in doc.shapes if s.fill is not None}
+            if self.separate == "ONE" and len(colors) >= 4:
+                tip = "%s has %d colors - set Objects to Per Color to keep them apart" % (name, len(colors))
+                if self.ignore_white:
+                    tip += " (and turn off White = Hole for illustrations)"
+                self.report({"INFO"}, tip)
         pipeline.select_objects(context, created)
         if not created:
             return {"CANCELLED"}

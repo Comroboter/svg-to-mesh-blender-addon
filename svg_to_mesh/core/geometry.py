@@ -36,6 +36,12 @@ class VectorShape:
     linejoin: str = "miter"
     miterlimit: float = 4.0
     name: str = "Shape"
+    fill_opacity: float = 1.0  # effective opacity (opacity x fill-opacity x gradient)
+    stroke_opacity: float = 1.0
+    blur: float = 0.0  # Gaussian blur radius of a filter effect (output units)
+    # clip-path: tuple of clip groups; a group is a list of VectorShapes whose
+    # union is the clip region (already in the same coordinates as the shape)
+    clips: tuple = ()
 
 
 @dataclass
@@ -47,6 +53,7 @@ class PolyShape:
     color: tuple = None
     name: str = "Shape"
     source_index: int = 0
+    clips: list = field(default_factory=list)  # list of clip groups (lists of PolyShape)
 
 
 def line_segment(a, b):
@@ -396,14 +403,24 @@ def _finite(sp):
     return all(math.isfinite(c) for seg in sp.segments for p in seg for c in p)
 
 
-def shape_to_polys(shape, tol, include_fill=True, include_stroke=True):
+def shape_to_polys(shape, tol, include_fill=True, include_stroke=True, clip_cache=None):
     """Flatten a VectorShape into PolyShapes (fill and/or stroke).
 
     Sub-paths with non-finite coordinates (overflowing numbers or
     transforms) are skipped instead of spoiling the whole import.
+    *clip_cache* (a dict) shares flattened clip groups between shapes that
+    use the same clip path.
     """
     result = []
     shape = VectorShape(**{**vars(shape), "subpaths": [sp for sp in shape.subpaths if _finite(sp)]})
+    clips = []
+    for group in shape.clips:
+        polys = clip_cache.get(id(group)) if clip_cache is not None else None
+        if polys is None:
+            polys = [p for c in group for p in shape_to_polys(c, tol, include_stroke=False)]
+            if clip_cache is not None:
+                clip_cache[id(group)] = polys
+        clips.append(polys)  # an empty group clips everything away
     if include_fill and shape.fill is not None:
         contours = []
         for sp in shape.subpaths:
@@ -412,7 +429,7 @@ def shape_to_polys(shape, tol, include_fill=True, include_stroke=True):
             if len(pts) >= 3:
                 contours.append(pts)
         if contours:
-            result.append(PolyShape(contours, shape.fill_rule, shape.fill, shape.name))
+            result.append(PolyShape(contours, shape.fill_rule, shape.fill, shape.name, clips=clips))
     if include_stroke and shape.stroke is not None and shape.stroke_width > 0:
         contours = []
         for sp in shape.subpaths:
@@ -424,5 +441,5 @@ def shape_to_polys(shape, tol, include_fill=True, include_stroke=True):
                 stroke_polygons(pts, closed, shape.stroke_width, shape.linecap, shape.linejoin, shape.miterlimit, tol)
             )
         if contours:
-            result.append(PolyShape(contours, "nonzero", shape.stroke, shape.name + "_stroke"))
+            result.append(PolyShape(contours, "nonzero", shape.stroke, shape.name + "_stroke", clips=clips))
     return result

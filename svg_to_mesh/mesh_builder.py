@@ -54,14 +54,32 @@ def triangulate(poly_shapes, group_of, knockout, settings, uniform=False):
     poly_shapes: list of PolyShape (paint order).
     group_of:    group id per shape.
     knockout:    per shape, True if the shape cuts away what lies below it.
+
+    Clip paths (PolyShape.clips) are added as extra, invisible shapes: a shape
+    only covers a triangle if its own fill rule holds there and every one of
+    its clip groups has at least one filled clip shape there.
     """
     eps = max(settings.merge_distance, 1e-9)
+    shapes = list(poly_shapes)
+    n_painted = len(shapes)
+    clip_index = {}  # id(group) -> list of aux shape indices (shared groups are added once)
+    clip_groups = []
+    for shp in poly_shapes:
+        groups = []
+        for group in getattr(shp, "clips", ()) or ():
+            key = id(group)
+            if key not in clip_index:
+                clip_index[key] = list(range(len(shapes), len(shapes) + len(group)))
+                shapes.extend(group)
+            groups.append(clip_index[key])
+        clip_groups.append(groups)
+
     verts = []
     edges = []
     edge_shape = []
     xs, ys = [], []
     uniform = uniform and settings.grid_size > 0
-    for si, shp in enumerate(poly_shapes):
+    for si, shp in enumerate(shapes):
         for contour in shp.contours:
             if uniform:
                 contour = subdivide_polygon(contour, settings.grid_size)
@@ -158,7 +176,11 @@ def triangulate(poly_shapes, group_of, knockout, settings, uniform=False):
     for w in winding:
         g = set()
         if w:
-            covering = [s for s, n in w.items() if _filled(poly_shapes[s].fill_rule, n)]
+            filled = {s for s, n in w.items() if _filled(shapes[s].fill_rule, n)}
+            covering = [
+                s for s in filled
+                if s < n_painted and all(any(a in filled for a in grp) for grp in clip_groups[s])
+            ]
             if covering:
                 if settings.overlap == "VISIBLE":
                     top = max(covering)

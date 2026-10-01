@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.3.0
+
+- **Illustrations import much better** (for example the Linux penguin Tux):
+  - Clipping paths (`clip-path`) are applied exactly.
+  - Soft effects drawn with a strong blur (drop shadows, glows, highlights) are left out instead of becoming hard blobs (*Skip Effects*). Slightly soft-edged shapes stay.
+  - Very transparent shading layers are left out (*Min Opacity*, default 50 %).
+  - Gradients become the average of their colors instead of the first stop, and a fade to transparent counts as half transparent.
+  - When an SVG with many colors is imported as a single object, a tip suggests *Objects: Per Color*.
+- **AI suggestions:** a progress bar with a cancel button shows in the sidebar while Claude is answering.
+- **AI suggestions:** fixed everything staying flat after scaling the imported objects. *Base Depth* now defaults to 0 = automatic (the current thickness of the selected objects); too small values give a warning.
+- **Updates from GitHub:** *Check for Updates* in the sidebar and in the add-on preferences shows when a new release is available, and *Install Update* downloads and installs it (restart Blender afterwards). The download comes only from GitHub over HTTPS and is checked against GitHub's SHA-256 checksum. Nothing is checked automatically.
+
 ## 1.2.1
 
 - Fix for Blender 5.2: with the default *Clean N-Gons* topology, holes could be filled and letters with holes (O, R, B ...) could disappear. Blender 5.2 changed how its triangulation reports holes; the add-on now decides holes itself, identically in every Blender version, and falls back to its own triangulation if the result does not match the exact area.

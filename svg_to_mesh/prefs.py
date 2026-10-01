@@ -19,7 +19,14 @@ class SVGMESH_AddonPreferences(bpy.types.AddonPreferences):
     model: EnumProperty(name="Model", items=MODELS, default=DEFAULT_MODEL)
 
     def draw(self, context):
+        from . import update_ops
+
         layout = self.layout
+        box = layout.box()
+        box.label(text="Updates")
+        update_ops.draw_updates(box)
+        box.label(text="Downloads the newest release from GitHub. Nothing is checked automatically.")
+
         box = layout.box()
         box.label(text="Optional: AI depth suggestions")
         col = box.column(align=True)

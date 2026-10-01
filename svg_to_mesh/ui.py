@@ -3,8 +3,8 @@ import textwrap
 
 import bpy
 
-from . import prefs
-from .depth_ops import SVGMESH_OT_ai_depth, SVGMESH_OT_reapply_depth, SVGMESH_OT_terrace
+from . import depth_ops, prefs, update_ops
+from .depth_ops import SVGMESH_OT_ai_cancel, SVGMESH_OT_ai_depth, SVGMESH_OT_reapply_depth, SVGMESH_OT_terrace
 from .operators import (
     SVGMESH_OT_boolean,
     SVGMESH_OT_curves_to_mesh,
@@ -53,6 +53,7 @@ class SVGMESH_PT_panel(bpy.types.Panel):
         op = row.operator(SVGMESH_OT_boolean.bl_idname, text="Add", icon="SELECT_EXTEND")
         op.operation = "UNION"
         layout.label(text="Tip: F9 adjusts the last import", icon="INFO")
+        update_ops.draw_updates(layout, compact=True)
 
 
 class SVGMESH_PT_depth(bpy.types.Panel):
@@ -67,7 +68,7 @@ class SVGMESH_PT_depth(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
-        layout.prop(scene, "svgmesh_base_depth")
+        layout.prop(scene, "svgmesh_depth_unit", text="Base Depth (0 = auto)")
         row = layout.row(align=True)
         row.operator(SVGMESH_OT_terrace.bl_idname, icon="SORTSIZE")
         row.operator(SVGMESH_OT_reapply_depth.bl_idname, text="", icon="FILE_REFRESH")
@@ -79,6 +80,8 @@ class SVGMESH_PT_depth(bpy.types.Panel):
             col.label(text="Let Claude pick a height per color")
             col.label(text="based on what the logo shows.")
             box.operator("preferences.addon_show", text="Set up AI...", icon="PREFERENCES").module = __package__
+        elif depth_ops.ai_job_status() is not None:
+            draw_ai_progress(box, *depth_ops.ai_job_status())
         else:
             box.prop(scene, "svgmesh_ai_hint", text="Hint")
             box.operator(SVGMESH_OT_ai_depth.bl_idname, icon="SHADERFX")
@@ -89,6 +92,16 @@ class SVGMESH_PT_depth(bpy.types.Panel):
             col.label(text="%s: height %.2g" % (obj.name, obj.get("svgmesh_height", 0)))
             for line in textwrap.wrap(str(reason), 36):
                 col.label(text=line)
+
+
+def draw_ai_progress(layout, elapsed, factor):
+    text = depth_ops.ai_job_text(elapsed)
+    row = layout.row(align=True)
+    if hasattr(row, "progress"):  # Blender 4.0+
+        row.progress(factor=factor, type="BAR", text=text)
+    else:
+        row.label(text=text, icon="SORTTIME")
+    row.operator(SVGMESH_OT_ai_cancel.bl_idname, text="", icon="CANCEL")
 
 
 def menu_import(self, context):
