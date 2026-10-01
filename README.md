@@ -34,9 +34,9 @@
 - **Logos from images, too.** Drop in a PNG or JPG and get smooth vector curves and a clean mesh, single- or multi-colored, without Inkscape or any other tool.
 - **Geometry you can keep working with.** Choose minimal n-gons for booleans, or an even triangle/quad mesh for subdivision, sculpting and deformation.
 
-![Comparison: Blender's default workflow vs. this add-on](docs/compare_svg.png)
+<p align="center"><img src="docs/compare_svg.gif" width="720" alt="Before/after: Blender's default SVG workflow vs. this add-on"></p>
 
-*Left: Blender's default workflow (import the SVG as curves, then "Convert to Mesh"): stacked overlapping layers, sliver triangles, duplicate vertices. Middle/right: this add-on, either as minimal n-gons or as an even quad grid.*
+*Left of the divider: Blender's default workflow (import the SVG as curves, then "Convert to Mesh") with stacked overlapping layers, sliver triangles and duplicate vertices. Right: this add-on, a few clean n-gons.*
 
 ## The problem
 
@@ -71,7 +71,7 @@ That is bad news for booleans: the Exact solver gets slow or produces artifacts.
 
 ### Four topologies
 
-![The four topology modes on the same logo](docs/topologies.png)
+<p align="center"><img src="docs/topologies.gif" width="560" alt="The four topology modes on the same artwork"></p>
 
 - **Clean N-Gons**: minimal geometry, one cap face per region and quads on the sides. **Ideal for booleans.**
 - **Triangles**: constrained Delaunay triangulation that only uses the outline vertices (fewest possible triangles; long edges lead to fans).
@@ -80,25 +80,25 @@ That is bad news for booleans: the Exact solver gets slow or produces artifacts.
 
 ### Strokes and line icons
 
-![Line icon: Blender vs. add-on](docs/strokes.png)
+<p align="center"><img src="docs/strokes.gif" width="600" alt="Line icon: Blender's import vs. the add-on"></p>
 
 Outlines (`stroke`) are turned into real geometry with the correct width, line caps and joins. Blender's own importer ignores them, so line icons end up as wire edges without any surface.
 
 ### Text objects
 
-![Text object converted by Blender and by the add-on](docs/text_to_mesh.png)
+<p align="center"><img src="docs/text_to_mesh.gif" width="720" alt="A text object converted by Blender and by the add-on"></p>
 
 *Curves to Clean Mesh* also works on Blender text objects and on curves you already have in your scene.
 
 ### Booleans
 
-![The add-on logo engraved into a block (left) and embossed onto a block (right)](docs/boolean.png)
+<p align="center"><img src="docs/boolean.gif" width="720" alt="The add-on logo engraved into a block (left) and embossed onto a block (right)"></p>
 
 The extruded meshes are closed solids, so the Exact boolean solver handles them reliably. The sidebar has one-click **Cut** (engrave) and **Add** (emboss) buttons.
 
 ### Depth per object (optional AI suggestions)
 
-![Multi-colored artwork with one object per color, stacked with Terrace by Order](docs/terrace.png)
+<p align="center"><img src="docs/terrace.gif" width="640" alt="Multi-colored artwork with one object per color, rising into terraces"></p>
 
 The collapsed **Depth per Object** section in the sidebar gives every selected object its own height (import with *Objects: Per Color* or *Per Shape* first):
 
@@ -109,7 +109,7 @@ To use the AI suggestions, open *Edit > Preferences > Add-ons > SVG to Clean Mes
 
 ### Image -> vector -> mesh
 
-![Tracing step by step](docs/trace_steps.png)
+<p align="center"><img src="docs/trace_steps.gif" width="420" alt="Tracing step by step: pixels, contour, Bezier curves, mesh"></p>
 
 Tracing runs entirely inside the add-on (only numpy, which ships with Blender). No external programs such as Inkscape or potrace are needed:
 
@@ -123,7 +123,7 @@ Tracing runs entirely inside the add-on (only numpy, which ships with Blender). 
 
 Multi-colored images are split into one mesh per color:
 
-![Multi-color image tracing](docs/trace_demo.png)
+<p align="center"><img src="docs/trace_demo.gif" width="720" alt="A PNG logo and the traced mesh with one object per color"></p>
 
 ## Installation
 

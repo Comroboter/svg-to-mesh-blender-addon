@@ -130,14 +130,144 @@ def import_svg(path, **kw):
 
 
 # --------------------------------------------------------------------------
-# 2D figures
+# Animated GIF helpers
 # --------------------------------------------------------------------------
 
 
-def fig_compare_svg():
-    """Blender's built-in route vs. the add-on on the badge example."""
-    svg = os.path.join(EXAMPLES, "badge.svg")
-    panels = []
+def fig_to_image(fig):
+    from PIL import Image
+
+    canvas = FigureCanvasAgg(fig)
+    canvas.draw()
+    return Image.fromarray(np.asarray(canvas.buffer_rgba())[..., :3].copy())
+
+
+def save_gif(frames, durations, name, dither=False, colors=160):
+    """Write an endlessly looping GIF with one shared palette (no flicker)."""
+    from PIL import Image
+
+    if isinstance(durations, (int, float)):
+        durations = [int(durations)] * len(frames)
+    sample = frames[:: max(1, len(frames) // 8)]
+    w, h = frames[0].size
+    montage = Image.new("RGB", (w, h * len(sample)))
+    for i, im in enumerate(sample):
+        montage.paste(im, (0, i * h))
+    palette = montage.quantize(colors=colors, method=Image.Quantize.MEDIANCUT)
+    mode = Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE
+    quantized = [im.quantize(palette=palette, dither=mode) for im in frames]
+    path = os.path.join(DOCS, name)
+    quantized[0].save(path, save_all=True, append_images=quantized[1:], duration=durations, loop=0)
+    print("wrote", path, "%d frames, %.1f MB" % (len(frames), os.path.getsize(path) / 1e6))
+
+
+def normalize(snap, target, shrink=1.0):
+    """Move/scale a snapshot so that its bounding box matches *target* (minx, miny, maxx, maxy).
+
+    *shrink* < 1 maps only that fraction of the box (e.g. to ignore stroke widths).
+    """
+    pts = [p for polys, _c in snap["parts"] for poly in polys for p in poly] + [p for e in snap["edges"] for p in e]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    sx, sy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+    size = max(max(xs) - min(xs), max(ys) - min(ys)) * shrink
+    tx, ty = (target[0] + target[2]) / 2, (target[1] + target[3]) / 2
+    k = max(target[2] - target[0], target[3] - target[1]) / size
+
+    def f(p):
+        return ((p[0] - sx) * k + tx, (p[1] - sy) * k + ty)
+
+    return {"parts": [([[f(p) for p in poly] for poly in polys], c) for polys, c in snap["parts"]],
+            "edges": [[f(p) for p in e] for e in snap["edges"]], "stats": snap["stats"]}
+
+
+def bounds_of(snap):
+    pts = [p for polys, _c in snap["parts"] for poly in polys for p in poly] + [p for e in snap["edges"] for p in e]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def draw_snap(ax, snap, colored=True, lw=0.35, edge=NAVY):
+    artists = []
+    for polys, color in snap["parts"]:
+        col = color if colored else FILL
+        artists.append(ax.add_collection(PolyCollection(polys, facecolors=[col], edgecolors=edge, linewidths=lw)))
+    if snap.get("edges"):
+        artists.append(ax.add_collection(LineCollection(snap["edges"], colors=edge, linewidths=1.2)))
+    return artists
+
+
+def slider_gif(name, left, right, left_text, right_text, frames=44, figsize=(9.6, 5.6), left_artists=None,
+               xlim=None, ylim=None):
+    """Before/after comparison: a divider glides back and forth (smooth, seamless loop).
+
+    left/right: functions(ax) -> list of artists drawn in data coordinates.
+    """
+    from matplotlib.patches import Rectangle
+
+    fig = plt.figure(figsize=figsize, dpi=100)
+    ax = fig.add_axes([0.02, 0.02, 0.96, 0.84])
+    a_left = left(ax)
+    a_right = right(ax)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    if xlim:
+        ax.set_xlim(*xlim)
+        ax.set_ylim(*ylim)
+    else:
+        ax.autoscale()
+        ax.margins(0.06)
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    big = (y1 - y0) * 10
+    line = ax.plot([x0, x0], [y0, y1], color=RED, lw=2.5, solid_capstyle="butt")[0]
+    knob = ax.plot([x0], [(y0 + y1) / 2], "o", ms=13, color=RED, mec="white", mew=2.5)[0]
+    fig.text(0.03, 0.95, left_text[0], fontsize=13, fontweight="bold", color=NAVY, va="top")
+    fig.text(0.03, 0.905, left_text[1], fontsize=10.5, color="#33415c", va="top")
+    fig.text(0.97, 0.95, right_text[0], fontsize=13, fontweight="bold", color=NAVY, va="top", ha="right")
+    fig.text(0.97, 0.905, right_text[1], fontsize=10.5, color="#33415c", va="top", ha="right")
+    images = []
+    for k in range(frames):
+        t = k / frames
+        pos = x0 + (x1 - x0) * (0.5 - 0.42 * math.cos(2 * math.pi * t))
+        # matplotlib caches clip paths, so new rectangles are set for every frame
+        clip_l = Rectangle((x0 - big, y0 - big), pos - x0 + big, 3 * big, transform=ax.transData)
+        clip_r = Rectangle((pos, y0 - big), x1 - pos + big, 3 * big, transform=ax.transData)
+        for a in a_left:
+            a.set_clip_path(clip_l)
+        for a in a_right:
+            a.set_clip_path(clip_r)
+        line.set_xdata([pos, pos])
+        knob.set_xdata([pos])
+        images.append(fig_to_image(fig))
+    plt.close(fig)
+    save_gif(images, 60, name)
+
+
+def slideshow_gif(name, states, figsize=(9.6, 5.6), hold=1500, limits=None):
+    """Cycle through states; each state is (title, subtitle, draw(ax))."""
+    images = []
+    for title, subtitle, draw in states:
+        fig = plt.figure(figsize=figsize, dpi=100)
+        ax = fig.add_axes([0.02, 0.02, 0.96, 0.84])
+        draw(ax)
+        ax.set_aspect("equal")
+        ax.axis("off")
+        if limits:
+            ax.set_xlim(*limits[0])
+            ax.set_ylim(*limits[1])
+        else:
+            ax.autoscale()
+            ax.margins(0.04)
+        fig.text(0.5, 0.95, title, fontsize=14, fontweight="bold", color=NAVY, va="top", ha="center")
+        fig.text(0.5, 0.9, subtitle, fontsize=10.5, color="#33415c", va="top", ha="center")
+        images.append(fig_to_image(fig))
+        plt.close(fig)
+    durations = hold if not isinstance(hold, (list, tuple)) else list(hold)
+    save_gif(images, durations, name)
+
+
+def blender_svg_snapshot(svg):
+    """Blender's own route: SVG import as curves, then Convert to Mesh."""
     clear_scene()
     bpy.ops.import_curve.svg(filepath=svg)
     curves = [o for o in bpy.data.objects if o.type == "CURVE"]
@@ -145,28 +275,70 @@ def fig_compare_svg():
         o.select_set(True)
     bpy.context.view_layer.objects.active = curves[0]
     bpy.ops.object.convert(target="MESH")
-    panels.append(("Blender: SVG import + Convert to Mesh", capture(mesh_objects())))
-    for topo, label in (("NGON", "Add-on: Clean N-Gons"), ("QUADS", "Add-on: Quads")):
-        clear_scene()
-        panels.append((label, capture(import_svg(svg, topology=topo, extrude=False, separate="COLOR"))))
-    fig, axes = plt.subplots(1, 3, figsize=(16, 6.2))
-    for ax, (label, snap) in zip(axes, panels):
-        v, f, _t = snap["stats"]
-        draw_objs(ax, snap, "%s\n%d vertices, %d faces" % (label, v, f), colored=False)
-    save(fig, "compare_svg.png")
+    return capture(mesh_objects())
+
+
+def problems(snap_objs):
+    """(duplicate vertices, broken edges) of the current mesh objects."""
+    import bmesh
+    from mathutils.kdtree import KDTree
+
+    dup = bad = 0
+    for o in snap_objs:
+        bm = bmesh.new()
+        bm.from_mesh(o.data)
+        kd = KDTree(len(bm.verts))
+        for i, v in enumerate(bm.verts):
+            kd.insert(v.co, i)
+        kd.balance()
+        dup += sum(1 for v in bm.verts if len(kd.find_range(v.co, 1e-6)) > 1)
+        bad += sum(1 for e in bm.edges if not e.link_faces or (not e.is_manifold and not e.is_boundary))
+        bm.free()
+    return dup, bad
+
+
+# --------------------------------------------------------------------------
+# 2D figures (animated)
+# --------------------------------------------------------------------------
+
+
+def fig_compare_svg():
+    """Slider: Blender's built-in route vs. the add-on on the badge example."""
+    svg = os.path.join(EXAMPLES, "badge.svg")
+    blender = blender_svg_snapshot(svg)
+    b_dup, b_bad = problems(mesh_objects())
+    clear_scene()
+    ours = capture(import_svg(svg, topology="NGON", extrude=False, separate="COLOR"))
+    o_dup, o_bad = problems(mesh_objects())
+    target = bounds_of(ours)
+    blender = normalize(blender, target)
+    bv, bf, _ = blender["stats"]
+    ov, of, _ = ours["stats"]
+    slider_gif(
+        "compare_svg.gif",
+        lambda ax: draw_snap(ax, blender, colored=False, lw=0.45),
+        lambda ax: draw_snap(ax, ours, colored=False, lw=0.6),
+        ("Blender: import + Convert to Mesh", "%d faces, %d duplicate vertices, %d broken edges" % (bf, b_dup, b_bad)),
+        ("SVG to Clean Mesh", "%d faces, %d duplicate vertices, %d broken edges" % (of, o_dup, o_bad)),
+        figsize=(8.4, 6.0),
+    )
 
 
 def fig_topologies():
-    """The four topology modes on the same multi-colored logo."""
+    """Cycle through the four topology modes on the same multi-colored artwork."""
     svg = os.path.join(EXAMPLES, "mountain_logo.svg")
-    modes = [("NGON", "Clean N-Gons"), ("TRIS", "Triangles"), ("UNIFORM", "Uniform Triangles"), ("QUADS", "Quads")]
-    fig, axes = plt.subplots(1, 4, figsize=(18, 5.2))
-    for ax, (topo, label) in zip(axes, modes):
+    modes = [("NGON", "Clean N-Gons", "fewest faces, ideal for booleans"),
+             ("TRIS", "Triangles", "constrained Delaunay, outline vertices only"),
+             ("UNIFORM", "Uniform Triangles", "even triangles for displacement and deformation"),
+             ("QUADS", "Quads", "quad-dominant grid for subdivision and sculpting")]
+    states = []
+    for topo, label, what in modes:
         clear_scene()
         snap = capture(import_svg(svg, topology=topo, extrude=False, separate="COLOR", grid_size=2.5))
         v, f, _t = snap["stats"]
-        draw_objs(ax, snap, "%s\n%d vertices, %d faces" % (label, v, f), lw=0.3)
-    save(fig, "topologies.png")
+        states.append((label, "%s  |  %d vertices, %d faces" % (what, v, f),
+                       lambda ax, snap=snap: draw_snap(ax, snap, lw=0.35)))
+    slideshow_gif("topologies.gif", states, figsize=(8.0, 6.4), hold=1600)
 
 
 def render_text_image(text, size_px, fontsize):
@@ -180,7 +352,7 @@ def render_text_image(text, size_px, fontsize):
 
 
 def fig_trace_steps():
-    """Pixels -> sub-pixel contour -> Bézier curves -> mesh."""
+    """Pixels -> sub-pixel contour (drawn progressively) -> Bezier curves -> mesh."""
     img = render_text_image("R", 56, 40)
     rgba = np.flipud(img)  # tracer expects the bottom row first
     h, w = rgba.shape[:2]
@@ -190,50 +362,55 @@ def fig_trace_steps():
     from svg_to_mesh.core.tracer import build_layers
 
     field, iso, _c, _n = build_layers(rgba, settings)[0]
-    contours = marching_squares(field, iso)
+    contours = [np.vstack([c, c[:1]]) for c in marching_squares(field, iso)]
+    n_points = sum(len(c) - 1 for c in contours)
 
     clear_scene()
     st = pipeline.ImportSettings(scale_mode="KEEP", origin="KEEP", depth=0.0, create_materials=False)
     objs = pipeline.build_objects(bpy.context, shapes, st, "trace")
-
-    fig, axes = plt.subplots(1, 4, figsize=(18, 5.0))
-    extent = (0, w, 0, h)
+    mesh = capture(objs)
+    v, f, _t = mesh["stats"]
     gray = rgba[..., :3].mean(axis=2)
-    for ax in axes:
-        ax.set_xlim(0, w)
-        ax.set_ylim(0, h)
-        ax.set_aspect("equal")
-        ax.axis("off")
-    axes[0].imshow(gray, cmap="gray", origin="lower", extent=extent, interpolation="nearest")
-    axes[0].set_title("1. Input: %d x %d px image" % (w, h))
+    extent = (0, w, 0, h)
+    n_seg = sum(len(sp.segments) for sp in shapes[0].subpaths)
 
-    axes[1].imshow(gray, cmap="gray", origin="lower", extent=extent, interpolation="nearest", alpha=0.35)
-    axes[1].add_collection(LineCollection([np.vstack([c, c[:1]]) for c in contours], colors=RED, linewidths=1.2))
-    axes[1].set_title("2. Sub-pixel contour (%d points)" % sum(len(c) for c in contours))
+    def pixels(ax, alpha=1.0):
+        ax.imshow(gray, cmap="gray", origin="lower", extent=extent, interpolation="nearest", alpha=alpha, vmin=0, vmax=1)
 
-    n_seg = 0
-    for sp in shapes[0].subpaths:
-        pts = np.array(flatten_subpath(sp, 0.02))
-        axes[2].plot(pts[:, 0], pts[:, 1], color=NAVY, lw=1.6)
-        for p0, c1, c2, p3 in sp.segments:
-            n_seg += 1
-            line = abs((c1[0] - p0[0]) * (p3[1] - p0[1]) - (c1[1] - p0[1]) * (p3[0] - p0[0])) < 1e-6
-            if not line:
-                axes[2].plot([p0[0], c1[0]], [p0[1], c1[1]], color=RED, lw=0.8)
-                axes[2].plot([p3[0], c2[0]], [p3[1], c2[1]], color=RED, lw=0.8)
-                axes[2].plot([c1[0], c2[0]], [c1[1], c2[1]], "o", color=RED, ms=2.5)
-            axes[2].plot([p0[0]], [p0[1]], "s", color=NAVY, ms=4)
-    axes[2].set_title("3. Fitted Bezier curves (%d segments)" % n_seg)
+    def contour_upto(ax, frac):
+        pixels(ax, 0.3)
+        segs = [c[: max(2, int(len(c) * frac))] for c in contours]
+        ax.add_collection(LineCollection(segs, colors=RED, linewidths=2.2))
 
-    v, f, _t = mesh_stats(objs)
-    for o in objs:
-        axes[3].add_collection(PolyCollection(top_polys(o), facecolors=FILL, edgecolors=NAVY, linewidths=0.6))
-    axes[3].set_title("4. Clean mesh (%d vertices, %d faces)" % (v, f))
-    save(fig, "trace_steps.png")
+    def bezier(ax):
+        for sp in shapes[0].subpaths:
+            pts = np.array(flatten_subpath(sp, 0.02))
+            ax.plot(pts[:, 0], pts[:, 1], color=NAVY, lw=2.4)
+            for p0, c1, c2, p3 in sp.segments:
+                straight = abs((c1[0] - p0[0]) * (p3[1] - p0[1]) - (c1[1] - p0[1]) * (p3[0] - p0[0])) < 1e-6
+                if not straight:
+                    ax.plot([p0[0], c1[0]], [p0[1], c1[1]], color=RED, lw=1.2)
+                    ax.plot([p3[0], c2[0]], [p3[1], c2[1]], color=RED, lw=1.2)
+                    ax.plot([c1[0], c2[0]], [c1[1], c2[1]], "o", color=RED, ms=5)
+                ax.plot([p0[0]], [p0[1]], "s", color=NAVY, ms=7)
+
+    states = [("1. Input image", "%d x %d pixels" % (w, h), pixels)]
+    steps = 10
+    durations = [1400]
+    for k in range(1, steps + 1):
+        states.append(("2. Sub-pixel contour", "%d points" % n_points,
+                       lambda ax, fr=k / steps: contour_upto(ax, fr)))
+        durations.append(90 if k < steps else 1100)
+    states.append(("3. Fitted Bezier curves", "%d segments, corners kept sharp" % n_seg, bezier))
+    durations.append(1600)
+    states.append(("4. Clean mesh", "%d vertices, %d faces" % (v, f),
+                   lambda ax: draw_snap(ax, mesh, colored=False, lw=1.0)))
+    durations.append(1800)
+    slideshow_gif("trace_steps.gif", states, figsize=(6.4, 6.4), hold=durations, limits=((0, w), (0, h)))
 
 
 def fig_trace_demo():
-    """A multi-colored logo image traced into one mesh per color."""
+    """Slider: a multi-colored logo image and the traced mesh (one object per color)."""
     from matplotlib.patches import Circle, FancyBboxPatch
 
     fig = plt.figure(figsize=(6, 2.4), dpi=100)
@@ -257,60 +434,56 @@ def fig_trace_demo():
     bpy.ops.import_mesh.image_trace(filepath=png, trace_mode="COLORS", num_colors=4, separate="COLOR", extrude=False)
     snap = capture(mesh_objects())
     v, _f, _t = snap["stats"]
-    fig, axes = plt.subplots(1, 2, figsize=(15, 3.8))
-    axes[0].imshow(img)
-    axes[0].axis("off")
-    axes[0].set_title("Input: PNG (600 x 240 px)")
-    draw_objs(axes[1], snap, "Result: one mesh per color, clean n-gons (%d vertices)" % v, lw=0.4)
-    save(fig, "trace_demo.png")
+    ink = img[..., :3].mean(axis=2) < 0.95
+    rows, cols = np.nonzero(ink)
+    h, w = ink.shape
+    target = (cols.min(), h - rows.max() - 1, cols.max() + 1, h - rows.min())
+    snap = normalize(snap, target)
+
+    def left(ax):
+        return [ax.imshow(img, extent=(0, w, 0, h), interpolation="nearest")]
+
+    slider_gif("trace_demo.gif", left, lambda ax: draw_snap(ax, snap, lw=0.6),
+               ("Input: PNG image", "%d x %d pixels" % (w, h)),
+               ("Traced: one mesh per color", "%d vertices, clean n-gons" % v),
+               figsize=(10.0, 4.6), xlim=(-10, w + 10), ylim=(-10, h + 10))
 
 
 def fig_text():
-    """Blender text object: built-in conversion vs. the add-on."""
-    panels = []
+    """Cycle: a Blender text object converted by Blender and by the add-on."""
+    states = []
     for mode in ("BLENDER", "NGON", "QUADS"):
         clear_scene()
         bpy.ops.object.text_add()
-        txt = bpy.context.active_object
-        txt.data.body = "Mesh 42"
+        bpy.context.active_object.data.body = "Mesh 42"
         if mode == "BLENDER":
             bpy.ops.object.convert(target="MESH")
-            objs = mesh_objects()
-            label = "Blender: Convert to Mesh"
+            title = "Blender: Convert to Mesh"
         else:
             bpy.ops.object.svgmesh_curves_to_mesh(topology=mode, extrude=False, grid_size=1.2)
-            objs = mesh_objects()
-            label = "Add-on: " + ("Clean N-Gons" if mode == "NGON" else "Quads")
-        panels.append((label, capture(objs)))
-    fig, axes = plt.subplots(3, 1, figsize=(11, 9.5))
-    for ax, (label, snap) in zip(axes, panels):
+            title = "SVG to Clean Mesh: " + ("Clean N-Gons" if mode == "NGON" else "Quads")
+        snap = capture(mesh_objects())
         v, f, _t = snap["stats"]
-        draw_objs(ax, snap, "%s: %d vertices, %d faces" % (label, v, f), colored=False, lw=0.4)
-    save(fig, "text_to_mesh.png")
+        states.append((title, "%d vertices, %d faces" % (v, f),
+                       lambda ax, snap=snap: draw_snap(ax, snap, colored=False, lw=0.5)))
+    slideshow_gif("text_to_mesh.gif", states, figsize=(10.0, 3.9), hold=1700)
 
 
 def fig_strokes():
-    """Line icons: strokes are turned into real outlines."""
+    """Slider: line icon imported by Blender (wire edges only) vs. the add-on (real outlines)."""
     svg = os.path.join(EXAMPLES, "line_icon.svg")
-    clear_scene()
-    bpy.ops.import_curve.svg(filepath=svg)
-    curves = [o for o in bpy.data.objects if o.type == "CURVE"]
-    for o in curves:
-        o.select_set(True)
-    bpy.context.view_layer.objects.active = curves[0]
-    bpy.ops.object.convert(target="MESH")
-    native = capture(mesh_objects())
+    native = blender_svg_snapshot(svg)
     clear_scene()
     ours = capture(import_svg(svg, topology="NGON", extrude=False))
-    fig, axes = plt.subplots(1, 2, figsize=(11, 5.4))
-    v, f, _t = native["stats"]
-    draw_objs(axes[0], native, "Blender: SVG import + Convert to Mesh\n(%d faces: only thin wire edges, no surface)" % f,
-              colored=False, lw=0.5)
+    # the add-on's outline is wider by the stroke width (1.8 of 16 units of center line)
+    native = normalize(native, bounds_of(ours), shrink=17.8 / 16.0)
     v, f, _t = ours["stats"]
-    draw_objs(axes[1], ours, "Add-on: strokes become outlines\n(%d vertices, %d faces)" % (v, f), lw=0.5)
-    for ax in axes:
-        ax.margins(0.08)
-    save(fig, "strokes.png")
+    slider_gif("strokes.gif",
+               lambda ax: draw_snap(ax, native, colored=False, lw=0.6),
+               lambda ax: draw_snap(ax, ours, lw=0.6),
+               ("Blender: import + Convert to Mesh", "%d faces: thin wire edges, no surface" % native["stats"][1]),
+               ("SVG to Clean Mesh", "strokes become outlines: %d vertices, %d faces" % (v, f)),
+               figsize=(8.4, 6.0))
 
 
 # --------------------------------------------------------------------------
@@ -448,30 +621,42 @@ def logo_scene(width, height, samples, floor="#e9edf2", camera=(0.0, -1.82, 1.72
     return objs, pivot
 
 
-def render_logo_hero():
-    """Animated title image: the flat logo rises into a 3D relief (docs/hero.gif)."""
+def render_frames(prefix, count, update):
+    """Render *count* frames; update(t) prepares the scene for t in [0, 1)."""
     from PIL import Image
 
-    frames = 4 if PREVIEW else 24
-    objs, pivot = logo_scene(800, 450, 48)
     os.makedirs(TMP, exist_ok=True)
-    paths = []
-    for k in range(frames):
-        t = k / (frames - 1)
-        logo_heights(objs, t, 0.04)
-        pivot.rotation_euler.z = math.radians(-28.0 + 28.0 * t)
-        path = os.path.join(TMP, "hero_%02d.png" % k)
+    images = []
+    for k in range(count):
+        update(k / count)
+        path = os.path.join(TMP, "%s_%02d.png" % (prefix, k))
         bpy.context.scene.render.filepath = path
         bpy.ops.render.render(write_still=True)
-        paths.append(path)
-    images = [Image.open(p).convert("RGB") for p in paths]
-    # one shared palette keeps the loop free of flicker
-    palette = images[-1].quantize(colors=192, method=Image.Quantize.MEDIANCUT)
-    seq = images + [images[-1]] * 14 + images[::-1] + [images[0]] * 8
-    quantized = [im.quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG) for im in seq]
-    out = os.path.join(DOCS, "hero.gif")
-    quantized[0].save(out, save_all=True, append_images=quantized[1:], duration=55, loop=0, optimize=True)
-    print("wrote", out, "%.1f MB" % (os.path.getsize(out) / 1e6))
+        images.append(Image.open(path).convert("RGB"))
+    return images
+
+
+def smooth_pulse(t, rise=(0.12, 0.42), fall=(0.78, 1.0)):
+    """0 -> 1 -> 0 over one loop with soft starts and stops (seamless)."""
+    def ease(x):
+        x = min(max(x, 0.0), 1.0)
+        return x * x * (3.0 - 2.0 * x)
+
+    up = ease((t - rise[0]) / (rise[1] - rise[0]))
+    down = ease((t - fall[0]) / (fall[1] - fall[0]))
+    return up * (1.0 - down)
+
+
+def render_logo_hero():
+    """Animated title image: the logo turns once and rises into a 3D relief (seamless loop)."""
+    frames = 6 if PREVIEW else 60
+    objs, pivot = logo_scene(800, 450, 48)
+
+    def update(t):
+        logo_heights(objs, smooth_pulse(t), 0.04)
+        pivot.rotation_euler.z = math.radians(-360.0 * t)
+
+    save_gif(render_frames("hero", frames, update), 60, "hero.gif", dither=True, colors=192)
 
     # high quality still of the final state (social preview, fallback)
     objs, pivot = logo_scene(1000, 1000, 160, floor=None, camera=(0.0, -1.5, 1.42))
@@ -481,21 +666,34 @@ def render_logo_hero():
 
 
 def render_terrace():
-    """Multi-colored artwork, one object per color, terraced by paint order."""
+    """Multi-colored artwork, one object per color, rising into terraces (seamless loop)."""
+    frames = 6 if PREVIEW else 44
     clear_scene()
-    setup_render(1200, 680, 128)
+    setup_render(760, 430, 48)
     objs = import_svg(os.path.join(EXAMPLES, "mountain_logo.svg"), separate="COLOR", depth=0.03,
                       ignore_white=False, target_size=1.0, origin="CENTER")
-    # every color a bit higher than the one below it ("Terrace by Order" in the sidebar)
-    bpy.ops.object.svgmesh_terrace(base_depth=0.03, step=0.7)
+    pivot = bpy.data.objects.new("Pivot", None)
+    bpy.context.scene.collection.objects.link(pivot)
     for o in objs:
+        o.parent = pivot
         add_bevel(o, 0.002)
         mat = o.data.materials[0]
         mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.4
     add_floor()
     add_lights()
     add_camera((0.0, -1.55, 1.75), (0.0, 0.03, 0.02), lens=50)
-    render("terrace.png")
+    from svg_to_mesh import depth_tools
+
+    ordered = depth_tools.paint_order(objs)
+
+    def update(t):
+        # grows from almost flat into "Terrace by Order" (step 0.7), with a gentle sway
+        p = smooth_pulse(t, rise=(0.08, 0.45), fall=(0.75, 1.0))
+        heights = {o: (0.15 + p * (0.85 + 0.7 * i), 0.0, "") for i, o in enumerate(ordered)}
+        depth_tools.apply_heights(ordered, heights, 0.03)
+        pivot.rotation_euler.z = math.radians(10.0 * math.sin(2 * math.pi * t))
+
+    save_gif(render_frames("terrace", frames, update), 70, "terrace.gif", dither=True, colors=192)
 
 
 def fig_logo_png():
@@ -542,33 +740,43 @@ def fig_social_preview():
 
 
 def render_boolean():
-    """The same logo engraved into one block and embossed onto another."""
+    """The add-on logo engraved into one block and embossed onto another, live booleans (seamless loop)."""
+    frames = 4 if PREVIEW else 36
     clear_scene()
-    setup_render(1200, 600, 128)
+    setup_render(800, 400, 48)
     stone = principled("Stone", "#c9b79c", 0.55)
-    blocks = []
+    cutters = []
     for x, op in ((-0.62, "DIFFERENCE"), (0.62, "UNION")):
         bpy.ops.mesh.primitive_cube_add(size=1.0, location=(x, 0, 0.15))
         block = bpy.context.active_object
         block.scale = (1.0, 1.0, 0.3)
         bpy.ops.object.transform_apply(scale=True)
         block.data.materials.append(stone)
-        logo = import_svg(LOGO, separate="ONE", target_size=0.82,
-                          depth=0.08 if op == "DIFFERENCE" else 0.05, center_depth=op == "DIFFERENCE",
+        logo = import_svg(LOGO, separate="ONE", target_size=0.82, depth=0.1, center_depth=True,
                           create_materials=False)[0]
-        logo.location = (x, 0, 0.3 if op == "DIFFERENCE" else 0.299)
+        logo.location = (x, 0, 0.36)
         for o in list(bpy.context.selected_objects):
             o.select_set(False)
         logo.select_set(True)
         block.select_set(True)
         bpy.context.view_layer.objects.active = block
-        bpy.ops.object.svgmesh_boolean(operation=op, apply=True)
+        bpy.ops.object.svgmesh_boolean(operation=op, apply=False, hide_cutters=False)
+        logo.hide_render = True
         add_bevel(block, 0.004)
-        blocks.append(block)
+        cutters.append((logo, op))
     add_floor("#c9d2dd")
     add_lights()
     add_camera((0.0, -2.75, 2.45), (0.0, 0.0, 0.1), lens=50)
-    render("boolean.png")
+
+    def update(t):
+        amount = smooth_pulse(t, rise=(0.05, 0.42), fall=(0.68, 0.98))
+        for logo, op in cutters:
+            if op == "DIFFERENCE":  # cutter (10 cm, centered) sinks into the top face
+                logo.location.z = 0.3 + 0.0495 - 0.042 * amount
+            else:  # the added logo grows out of the top face
+                logo.location.z = 0.3 - 0.0495 + 0.048 * amount
+
+    save_gif(render_frames("boolean", frames, update), 70, "boolean.gif", dither=True, colors=160)
 
 
 FIGURES = {
