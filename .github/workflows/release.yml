@@ -74,8 +74,8 @@ jobs:
 
             ## Installation
             1. Download **svg_to_mesh-${{ steps.version.outputs.version }}.zip** below (do not unzip it).
-            2. **Blender 4.2+:** *Edit → Preferences → Get Extensions → ⌄ (top right) → Install from Disk…*
-               **Blender 3.6 – 4.1:** *Edit → Preferences → Add-ons → Install…*, then enable the add-on.
-            3. Open the 3D Viewport sidebar (**N**) → **SVG Mesh** tab, or use *File → Import*.
+            2. **Blender 4.2 and newer:** *Edit > Preferences > Get Extensions*, open the drop-down menu in the top right corner and choose *Install from Disk...*
+               **Blender 3.6 to 4.1:** *Edit > Preferences > Add-ons > Install...*, then enable the add-on.
+            3. Open the 3D Viewport sidebar (**N**), tab **SVG Mesh**, or use *File > Import*.
 
             See the [README](https://github.com/${{ github.repository }}#readme) for usage and options.

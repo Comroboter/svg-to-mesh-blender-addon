@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+  <!-- Example logo: several colors, overlapping shapes, a white cut-out and a stroke -->
+  <circle cx="200" cy="200" r="190" fill="#1d3557"/>
+  <circle cx="200" cy="200" r="168" fill="#f1e3c8"/>
+  <circle cx="250" cy="140" r="42" fill="#f4a261"/>
+  <path fill="#2a9d8f" d="M38 290 L135 165 L185 222 L250 128 L362 290 A170 170 0 0 1 38 290 Z"/>
+  <path fill="#ffffff" d="M135 165 L157 193 L144 186 L131 199 L121 183 Z M250 128 L276 166 L260 158 L247 172 L234 152 Z"/>
+  <path fill="none" stroke="#f1e3c8" stroke-width="10" stroke-linecap="round"
+        d="M120 330 C 170 300, 210 345, 265 312 S 320 300, 330 280"/>
+</svg>
