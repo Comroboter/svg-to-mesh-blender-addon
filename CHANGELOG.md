@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+
+- *Check for Updates* now reads the installed version correctly when the add-on is installed as an extension (Blender 4.2+); 1.3.0 always reported an update there.
+
 ## 1.3.0
 
 - **Illustrations import much better** (for example the Linux penguin Tux):

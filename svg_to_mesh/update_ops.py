@@ -1,6 +1,7 @@
 """Check for and install add-on updates from GitHub releases (only on request)."""
 
 import os
+import re
 import sys
 
 import bpy
@@ -13,6 +14,17 @@ STATE = {}
 
 
 def current_version():
+    """Installed version: from the manifest (Blender removes bl_info from
+    extensions), else from bl_info (legacy add-on in Blender 3.6 - 4.1)."""
+    manifest = os.path.join(os.path.dirname(os.path.abspath(__file__)), "blender_manifest.toml")
+    try:
+        with open(manifest, encoding="utf-8") as fh:
+            m = re.search(r'^version\s*=\s*"([^"]+)"', fh.read(), re.M)
+        version = updater.parse_version(m.group(1)) if m else None
+        if version:
+            return version
+    except OSError:
+        pass
     info = getattr(sys.modules.get(__package__), "bl_info", None) or {}
     return tuple(info.get("version", (0, 0, 0)))
 

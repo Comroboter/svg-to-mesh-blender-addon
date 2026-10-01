@@ -320,6 +320,8 @@ def test_ai_progress_status():
 def test_update_operators_are_registered():
     from svg_to_mesh import update_ops
 
-    assert update_ops.current_version() >= (1, 3, 0)
+    import build
+
+    assert update_ops.current_version() == tuple(int(x) for x in build.get_version().split("."))
     assert hasattr(bpy.ops.preferences, "svgmesh_check_update")
     assert not bpy.ops.preferences.svgmesh_install_update.poll()  # nothing checked yet
