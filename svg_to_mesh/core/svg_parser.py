@@ -65,6 +65,16 @@ SKIP_TAGS = {
 }
 
 
+# Limits that protect against malicious or broken files (e.g. "<use> bombs"
+# where a few references expand to billions of shapes).
+MAX_ELEMENTS = 200000  # elements visited, counting every <use> expansion
+MAX_DEPTH = 400  # nesting depth of groups / <use> chains
+
+
+class SvgError(ValueError):
+    """The SVG is invalid or exceeds the safety limits."""
+
+
 class SvgDocument:
     def __init__(self):
         self.shapes = []
@@ -93,6 +103,8 @@ def parse_length(value, default=0.0, percent_of=None):
     if not m:
         return default
     num = float(m.group(1))
+    if not math.isfinite(num):
+        return default
     unit = m.group(2).lower()
     if unit == "%":
         return num / 100.0 * percent_of if percent_of is not None else default
@@ -100,7 +112,7 @@ def parse_length(value, default=0.0, percent_of=None):
 
 
 def parse_numbers(text):
-    return [float(x) for x in _NUM_RE.findall(text or "")]
+    return [v for v in (float(x) for x in _NUM_RE.findall(text or "")) if math.isfinite(v)]
 
 
 def parse_color(value, current_color=None, gradients=None):
@@ -283,7 +295,10 @@ class _PathScanner:
         if not m:
             raise ValueError("number expected at %d" % self.i)
         self.i = m.end()
-        return float(m.group(0))
+        v = float(m.group(0))
+        if not math.isfinite(v):
+            raise ValueError("number out of range at %d" % self.i)
+        return v
 
     def flag(self):
         self.skip()
@@ -523,6 +538,8 @@ class _Parser:
         self.sheet = StyleSheet()
         self.gradients = {}
         self.use_depth = 0
+        self.visited = 0
+        self.depth = 0
         for el in root.iter():
             ident = el.get("id")
             if ident:
@@ -571,6 +588,18 @@ class _Parser:
 
     # -- walking ---------------------------------------------------------
     def walk(self, el, ctm, parent_style):
+        self.visited += 1
+        if self.visited > MAX_ELEMENTS:
+            raise SvgError("SVG is too complex (more than %d elements after expanding <use>)" % MAX_ELEMENTS)
+        if self.depth >= MAX_DEPTH:
+            raise SvgError("SVG is nested too deeply (more than %d levels)" % MAX_DEPTH)
+        self.depth += 1
+        try:
+            self._walk(el, ctm, parent_style)
+        finally:
+            self.depth -= 1
+
+    def _walk(self, el, ctm, parent_style):
         tag = _local(el.tag)
         if tag in SKIP_TAGS:
             return

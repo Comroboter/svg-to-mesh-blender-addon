@@ -290,7 +290,8 @@ class TraceOptions:
     save_svg: BoolProperty(name="Save SVG", default=False, description="Also write the traced vectors as SVG file")
     svg_path: StringProperty(
         name="SVG File", subtype="FILE_PATH", default="",
-        description="Where to save the SVG (empty = next to the image)",
+        description="Where to save the SVG (empty = <image name>_traced.svg next to the image). "
+        "An existing file is overwritten",
     )
 
     def trace_settings(self):
@@ -466,6 +467,9 @@ class SVGMESH_OT_curves_to_mesh(Operator, MeshOptions):
                 context, shapes, st, obj.name + "_mesh",
                 collection=colls[0] if colls else None, matrix=obj.matrix_world.copy(),
             )
+            if not objs:
+                self.report({"WARNING"}, "%s: no filled area found - original kept" % obj.name)
+                continue
             for o in objs:
                 if self.use_material and obj.data.materials and obj.data.materials[0]:
                     o.data.materials.append(obj.data.materials[0])

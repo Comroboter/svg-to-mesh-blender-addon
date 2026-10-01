@@ -54,12 +54,13 @@ def gaussian_blur(a, sigma):
     x = np.arange(-radius, radius + 1, dtype=np.float64)
     k = np.exp(-(x * x) / (2 * sigma * sigma))
     k /= k.sum()
-    out = np.pad(a, radius, mode="edge").astype(np.float64)
+    out = np.pad(a, radius, mode="edge").astype(np.float32)
+    k = k.astype(np.float32)
     # separable convolution by summing shifted copies (fast for small kernels)
-    tmp = np.zeros((out.shape[0], a.shape[1]))
+    tmp = np.zeros((out.shape[0], a.shape[1]), dtype=np.float32)
     for i, w in enumerate(k):
         tmp += w * out[:, i:i + a.shape[1]]
-    res = np.zeros(a.shape)
+    res = np.zeros(a.shape, dtype=np.float32)
     for i, w in enumerate(k):
         res += w * tmp[i:i + a.shape[0], :]
     return res
@@ -338,7 +339,7 @@ def contour_to_subpath(pts, settings, scale=1.0):
     err = max(0.05, settings.fit_error)
     segs = []
     if not corners:
-        segs = fit_closed_smooth([tuple(p) for p in pts.tolist()], err, tangent_reach=6)
+        segs = fit_closed_smooth(pts, err, tangent_reach=6)
     else:
         n = len(pts)
         runs = [pts[np.arange(a, b + 1) % n] for a, b in zip(corners, corners[1:] + [corners[0] + n])]
@@ -362,7 +363,7 @@ def contour_to_subpath(pts, settings, scale=1.0):
             else:
                 run = run.copy()
                 run[0], run[-1] = a, b
-                segs.extend(fit_open([tuple(p) for p in run.tolist()], err, tangent_reach=6))
+                segs.extend(fit_open(run, err, tangent_reach=6))
     if not segs:
         return None
     if scale != 1.0:

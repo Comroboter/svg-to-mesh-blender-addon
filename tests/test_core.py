@@ -252,3 +252,48 @@ def test_trace_alpha_mode():
     img[np.hypot(xx - 25, yy - 25) < 15, 3] = 1.0
     shapes, _w, _h = trace_image(img, TraceSettings())  # AUTO picks alpha
     assert len(shapes) == 1 and len(shapes[0].subpaths) == 1
+
+
+# --------------------------------------------------------------------------
+# Robustness against malicious / broken files
+# --------------------------------------------------------------------------
+
+
+def test_use_bomb_is_rejected():
+    from svg_to_mesh.core.svg_parser import SvgError
+
+    levels = ['<path id="l0" d="M0 0h1v1z"/>']
+    levels += ['<g id="l%d">%s</g>' % (i, '<use href="#l%d"/>' % (i - 1) * 10) for i in range(1, 9)]
+    svg = '<svg xmlns="http://www.w3.org/2000/svg"><defs>%s</defs><use href="#l8"/></svg>' % "".join(levels)
+    with pytest.raises(SvgError):
+        parse_svg(svg)
+
+
+def test_deep_nesting_is_rejected():
+    from svg_to_mesh.core.svg_parser import SvgError
+
+    svg = '<svg xmlns="http://www.w3.org/2000/svg">%s<rect width="1" height="1"/>%s</svg>' % ("<g>" * 2000, "</g>" * 2000)
+    with pytest.raises(SvgError):
+        parse_svg(svg)
+
+
+def test_entity_expansion_is_rejected():
+    import xml.etree.ElementTree as ET
+
+    ents = '<!ENTITY a "aaaaaaaaaa">' + "".join(
+        '<!ENTITY %s "%s">' % (chr(98 + i), ("&%s;" % chr(97 + i)) * 10) for i in range(9)
+    )
+    svg = '<?xml version="1.0"?><!DOCTYPE svg [%s]><svg xmlns="http://www.w3.org/2000/svg"><desc>&j;</desc></svg>' % ents
+    with pytest.raises(ET.ParseError):
+        parse_svg(svg)
+
+
+def test_non_finite_numbers_do_not_spoil_other_shapes():
+    svg = """<svg xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 0 L1e400 0 L0 10z"/>
+      <g transform="scale(1e300)"><path d="M0 0 L1e300 0 L0 10z"/></g>
+      <rect width="10" height="10"/></svg>"""
+    doc = parse_svg(svg)
+    polys = [p for s in doc.shapes for p in shape_to_polys(s, 0.01)]
+    assert len(polys) == 1
+    assert poly_area(polys) == pytest.approx(100)

@@ -199,20 +199,30 @@ def _steiner_grid(boundary_pts, minx, miny, maxx, maxy, step):
 # --------------------------------------------------------------------------
 
 
-def region_loops(tri, group, eps):
+def faces_by_group(tri):
+    """Face indices per group id (one pass instead of one per group)."""
+    out = {}
+    for fi, g in enumerate(tri.groups):
+        for gid in g:
+            out.setdefault(gid, []).append(fi)
+    return out
+
+
+def region_loops(tri, group, eps, faces=None):
     """Boundary loops of the triangles of *group* (outer CCW, holes CW).
 
     Walking around each vertex through its triangle fan keeps regions that
     touch in a single point as separate loops.  Vertices that only lie on a
     straight line (left over from hidden shapes) are removed.
     """
+    if faces is None:
+        faces = [fi for fi, g in enumerate(tri.groups) if group in g]
     third = {}
-    for f, g in zip(tri.faces, tri.groups):
-        if group in g:
-            a, b, c = f
-            third[(a, b)] = c
-            third[(b, c)] = a
-            third[(c, a)] = b
+    for fi in faces:
+        a, b, c = tri.faces[fi]
+        third[(a, b)] = c
+        third[(b, c)] = a
+        third[(c, a)] = b
     boundary = [e for e in third if (e[1], e[0]) not in third]
     nxt = {}
     for u, v in boundary:
@@ -274,11 +284,14 @@ def _faces_from_tri(bm, tri, group):
             pass
 
 
-def build_bmesh(tri, group, settings):
-    """Create a bmesh for one group of a TriangulationResult."""
+def build_bmesh(tri, group, settings, faces=None):
+    """Create a bmesh for one group of a TriangulationResult.
+
+    *faces* optionally lists the face indices of the group (see faces_by_group).
+    """
     eps = max(settings.merge_distance, 1e-9)
     bm = bmesh.new()
-    loops = region_loops(tri, group, eps)
+    loops = region_loops(tri, group, eps, faces)
     if not loops:
         return bm
 

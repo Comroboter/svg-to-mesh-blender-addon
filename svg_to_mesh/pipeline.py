@@ -129,8 +129,9 @@ def build_objects(context, shapes, settings, name, collection=None, matrix=None)
     if collection is None:
         collection = context.collection or context.scene.collection
     objects = []
+    group_faces = mesh_builder.faces_by_group(tri)
     for gid, first in enumerate(group_info):
-        bm = mesh_builder.build_bmesh(tri, gid, ms)
+        bm = mesh_builder.build_bmesh(tri, gid, ms, group_faces.get(gid, []))
         if not bm.faces:
             bm.free()
             continue

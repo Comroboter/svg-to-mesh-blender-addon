@@ -105,6 +105,8 @@ def shapes_bounds(shapes):
     xs, ys = [], []
     for s in shapes:
         for sp in s.subpaths:
+            if not _finite(sp):
+                continue
             for seg in sp.segments:
                 for x, y in seg:
                     xs.append(x)
@@ -390,9 +392,18 @@ def stroke_polygons(pts, closed, width, cap="butt", join="miter", miterlimit=4.0
 # --------------------------------------------------------------------------
 
 
+def _finite(sp):
+    return all(math.isfinite(c) for seg in sp.segments for p in seg for c in p)
+
+
 def shape_to_polys(shape, tol, include_fill=True, include_stroke=True):
-    """Flatten a VectorShape into PolyShapes (fill and/or stroke)."""
+    """Flatten a VectorShape into PolyShapes (fill and/or stroke).
+
+    Sub-paths with non-finite coordinates (overflowing numbers or
+    transforms) are skipped instead of spoiling the whole import.
+    """
     result = []
+    shape = VectorShape(**{**vars(shape), "subpaths": [sp for sp in shape.subpaths if _finite(sp)]})
     if include_fill and shape.fill is not None:
         contours = []
         for sp in shape.subpaths:
