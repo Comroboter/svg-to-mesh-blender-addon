@@ -138,7 +138,7 @@ The tests in `tests/test_blender.py` run against real Blender through the `bpy` 
 
 ### Making a release
 
-Push a tag such as `v1.0.1` (the version in `svg_to_mesh/blender_manifest.toml` must match), or start the **Release** workflow manually under *Actions*. It runs the tests, builds the ZIP and publishes it as a GitHub release.
+Bump `version` in `svg_to_mesh/blender_manifest.toml` (and `bl_info` in `__init__.py`) and push. The **Release** workflow runs the tests, builds the ZIP and publishes it as release `v<version>` (if that release does not exist yet). Pushing a tag `v<version>` or starting the workflow manually under *Actions* works too.
 
 ## License
 
