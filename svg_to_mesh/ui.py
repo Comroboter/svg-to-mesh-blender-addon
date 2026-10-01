@@ -1,3 +1,4 @@
+import os
 import textwrap
 
 import bpy
@@ -12,12 +13,26 @@ from .operators import (
 )
 
 
+_previews = None
+
+
+def logo_icon():
+    """icon_value of the add-on logo (0 = no icon) for layout calls."""
+    try:
+        return _previews["logo"].icon_id
+    except (TypeError, KeyError):
+        return 0
+
+
 class SVGMESH_PT_panel(bpy.types.Panel):
     bl_label = "SVG to Mesh"
     bl_idname = "SVGMESH_PT_panel"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "SVG Mesh"
+
+    def draw_header(self, context):
+        self.layout.label(text="", icon_value=logo_icon())
 
     def draw(self, context):
         layout = self.layout
@@ -77,8 +92,8 @@ class SVGMESH_PT_depth(bpy.types.Panel):
 
 
 def menu_import(self, context):
-    self.layout.operator(SVGMESH_OT_import_svg.bl_idname, text="SVG as Clean Mesh (.svg)")
-    self.layout.operator(SVGMESH_OT_trace_image.bl_idname, text="Image Trace to Mesh")
+    self.layout.operator(SVGMESH_OT_import_svg.bl_idname, text="SVG as Clean Mesh (.svg)", icon_value=logo_icon())
+    self.layout.operator(SVGMESH_OT_trace_image.bl_idname, text="Image Trace to Mesh", icon_value=logo_icon())
 
 
 def menu_convert(self, context):
@@ -103,6 +118,14 @@ if hasattr(bpy.types, "FileHandler"):  # Blender 4.1+: drag & drop .svg files
 
 
 def register():
+    global _previews
+    try:
+        import bpy.utils.previews
+
+        _previews = bpy.utils.previews.new()
+        _previews.load("logo", os.path.join(os.path.dirname(__file__), "icons", "logo.png"), "IMAGE")
+    except Exception:  # noqa: BLE001 - the icon is cosmetic
+        _previews = None
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.TOPBAR_MT_file_import.append(menu_import)
@@ -116,3 +139,7 @@ def unregister():
     bpy.types.TOPBAR_MT_file_import.remove(menu_import)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
+    global _previews
+    if _previews is not None:
+        bpy.utils.previews.remove(_previews)
+        _previews = None

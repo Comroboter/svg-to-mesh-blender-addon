@@ -408,8 +408,80 @@ def render(name):
     print("wrote", path)
 
 
-def render_hero():
-    """Multi-colored logo, one object per color, terraced by paint order."""
+LOGO = os.path.join(DOCS, "logo.svg")
+LOGO_HEIGHTS = {"#e63946": 1.9}  # the red curve stands out, the cube faces get height 1.0
+
+
+def import_logo(depth=0.04):
+    objs = import_svg(LOGO, separate="COLOR", depth=depth, target_size=1.0, origin="CENTER")
+    for o in objs:
+        mat = o.data.materials[0]
+        mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.35
+    return objs
+
+
+def logo_heights(objs, t, base_depth):
+    """Heights of the logo objects at animation time t (0 = flat, 1 = final)."""
+    from svg_to_mesh import depth_tools
+
+    ease = t * t * (3.0 - 2.0 * t)
+    heights = {}
+    for o in objs:
+        final = LOGO_HEIGHTS.get(o.get("svgmesh_color"), 1.0)
+        heights[o] = (0.04 + ease * (final - 0.04), 0.0, "")
+    depth_tools.apply_heights(objs, heights, base_depth)
+
+
+def logo_scene(width, height, samples, floor="#e9edf2", camera=(0.0, -1.82, 1.72)):
+    clear_scene()
+    setup_render(width, height, samples)
+    objs = import_logo()
+    pivot = bpy.data.objects.new("Pivot", None)
+    bpy.context.scene.collection.objects.link(pivot)
+    for o in objs:
+        o.parent = pivot
+        add_bevel(o, 0.0025)
+    if floor:
+        add_floor(floor)
+    add_lights()
+    add_camera(camera, (0.0, 0.02, 0.03), lens=50)
+    return objs, pivot
+
+
+def render_logo_hero():
+    """Animated title image: the flat logo rises into a 3D relief (docs/hero.gif)."""
+    from PIL import Image
+
+    frames = 4 if PREVIEW else 24
+    objs, pivot = logo_scene(800, 450, 48)
+    os.makedirs(TMP, exist_ok=True)
+    paths = []
+    for k in range(frames):
+        t = k / (frames - 1)
+        logo_heights(objs, t, 0.04)
+        pivot.rotation_euler.z = math.radians(-28.0 + 28.0 * t)
+        path = os.path.join(TMP, "hero_%02d.png" % k)
+        bpy.context.scene.render.filepath = path
+        bpy.ops.render.render(write_still=True)
+        paths.append(path)
+    images = [Image.open(p).convert("RGB") for p in paths]
+    # one shared palette keeps the loop free of flicker
+    palette = images[-1].quantize(colors=192, method=Image.Quantize.MEDIANCUT)
+    seq = images + [images[-1]] * 14 + images[::-1] + [images[0]] * 8
+    quantized = [im.quantize(palette=palette, dither=Image.Dither.FLOYDSTEINBERG) for im in seq]
+    out = os.path.join(DOCS, "hero.gif")
+    quantized[0].save(out, save_all=True, append_images=quantized[1:], duration=55, loop=0, optimize=True)
+    print("wrote", out, "%.1f MB" % (os.path.getsize(out) / 1e6))
+
+    # high quality still of the final state (social preview, fallback)
+    objs, pivot = logo_scene(1000, 1000, 160, floor=None, camera=(0.0, -1.5, 1.42))
+    logo_heights(objs, 1.0, 0.04)
+    bpy.context.scene.render.film_transparent = True
+    render("logo_3d.png")
+
+
+def render_terrace():
+    """Multi-colored artwork, one object per color, terraced by paint order."""
     clear_scene()
     setup_render(1200, 680, 128)
     objs = import_svg(os.path.join(EXAMPLES, "mountain_logo.svg"), separate="COLOR", depth=0.03,
@@ -423,7 +495,50 @@ def render_hero():
     add_floor()
     add_lights()
     add_camera((0.0, -1.55, 1.75), (0.0, 0.03, 0.02), lens=50)
-    render("hero.png")
+    render("terrace.png")
+
+
+def fig_logo_png():
+    """Flat PNG versions of the logo (docs + Blender panel icon)."""
+    clear_scene()
+    snap = capture(import_svg(LOGO, separate="COLOR", extrude=False))
+    for path, px in ((os.path.join(DOCS, "logo.png"), 512),
+                     (os.path.join(ROOT, "svg_to_mesh", "icons", "logo.png"), 64)):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fig = plt.figure(figsize=(px / 100, px / 100), dpi=100)
+        ax = fig.add_axes([0, 0, 1, 1])
+        for polys, color in snap["parts"]:
+            ax.add_collection(PolyCollection(polys, facecolors=[color], edgecolors=[color], linewidths=0.2))
+        ax.autoscale()
+        ax.set_aspect("equal")
+        ax.margins(0.03)
+        ax.axis("off")
+        fig.savefig(path, dpi=100, transparent=True)
+        plt.close(fig)
+        print("wrote", path)
+
+
+def fig_social_preview():
+    """1280 x 640 image GitHub shows when the repository link is shared."""
+    import matplotlib.image as mpimg
+
+    logo = mpimg.imread(os.path.join(DOCS, "logo_3d.png"))
+    fig = plt.figure(figsize=(12.8, 6.4), dpi=100)
+    fig.patch.set_facecolor("#f1f4f8")
+    ax = fig.add_axes([0.03, 0.05, 0.42, 0.9])
+    ax.imshow(logo)
+    ax.axis("off")
+    fig.text(0.48, 0.66, "SVG to Clean Mesh", fontsize=44, fontweight="bold", color=NAVY)
+    fig.text(0.485, 0.54, "Free Blender add-on", fontsize=24, color="#457b9d")
+    lines = ["SVG files and logo images to clean,", "manifold meshes - ready for booleans,",
+             "engraving and 3D printing."]
+    for i, line in enumerate(lines):
+        fig.text(0.485, 0.41 - i * 0.075, line, fontsize=21, color="#33415c")
+    fig.text(0.485, 0.12, "Blender 3.6 - 5.0  |  GPL-3.0", fontsize=16, color="#6b7a90")
+    path = os.path.join(DOCS, "social_preview.png")
+    fig.savefig(path, dpi=100, facecolor=fig.get_facecolor())
+    plt.close(fig)
+    print("wrote", path)
 
 
 def render_boolean():
@@ -438,7 +553,7 @@ def render_boolean():
         block.scale = (1.0, 1.0, 0.3)
         bpy.ops.object.transform_apply(scale=True)
         block.data.materials.append(stone)
-        logo = import_svg(os.path.join(EXAMPLES, "badge.svg"), separate="ONE", target_size=0.8,
+        logo = import_svg(LOGO, separate="ONE", target_size=0.82,
                           depth=0.08 if op == "DIFFERENCE" else 0.05, center_depth=op == "DIFFERENCE",
                           create_materials=False)[0]
         logo.location = (x, 0, 0.3 if op == "DIFFERENCE" else 0.299)
@@ -463,8 +578,11 @@ FIGURES = {
     "trace_demo": fig_trace_demo,
     "text": fig_text,
     "strokes": fig_strokes,
-    "hero": render_hero,
+    "logo_png": fig_logo_png,
+    "hero": render_logo_hero,
+    "terrace": render_terrace,
     "boolean": render_boolean,
+    "social": fig_social_preview,
 }
 
 

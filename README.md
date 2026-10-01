@@ -1,10 +1,38 @@
-# SVG to Clean Mesh – Blender Add-on
+<p align="center">
+  <img src="docs/logo.svg" width="150" alt="SVG to Clean Mesh logo">
+</p>
 
-![A multi-colored logo imported as one solid per color](docs/hero.png)
+<h1 align="center">SVG to Clean Mesh</h1>
 
-Import **SVG files directly as clean meshes** and **trace images (e.g. logos) automatically into vectors and meshes**, with geometry that is pleasant to work with, especially for **booleans** (engraving, embossing, cutting).
+<p align="center">
+  <b>Free Blender add-on: turn SVG files and logo images into clean, manifold meshes,<br>
+  ready for booleans, engraving and 3D printing.</b>
+</p>
 
-**[Download the latest release](../../releases/latest)**
+<p align="center">
+  <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/Comroboter/svg-to-mesh-blender-addon?label=download&color=e63946" alt="Latest release"></a>
+  <a href="../../releases"><img src="https://img.shields.io/github/downloads/Comroboter/svg-to-mesh-blender-addon/total?color=457b9d" alt="Downloads"></a>
+  <a href="../../actions/workflows/tests.yml"><img src="https://github.com/Comroboter/svg-to-mesh-blender-addon/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <img src="https://img.shields.io/badge/Blender-3.6%20to%205.0-1d3557?logo=blender&logoColor=white" alt="Blender 3.6 to 5.0">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-a8dadc" alt="License: GPL-3.0"></a>
+</p>
+
+<p align="center">
+  <a href="../../releases/latest"><b>Download</b></a> |
+  <a href="#installation">Installation</a> |
+  <a href="#usage">Usage</a> |
+  <a href="#main-options">Options</a>
+</p>
+
+<p align="center">
+  <img src="docs/hero.gif" width="720" alt="The add-on logo, imported from SVG, rising from a flat shape into a 3D relief">
+</p>
+
+**Why this add-on?**
+
+- **One click from SVG to a clean solid.** No more "convert to mesh, merge by distance, fill holes, fix normals". Every result is closed and manifold, so booleans just work.
+- **Logos from images, too.** Drop in a PNG or JPG and get smooth vector curves and a clean mesh, single- or multi-colored, without Inkscape or any other tool.
+- **Geometry you can keep working with.** Choose minimal n-gons for booleans, or an even triangle/quad mesh for subdivision, sculpting and deformation.
 
 ![Comparison: Blender's default workflow vs. this add-on](docs/compare_svg.png)
 
@@ -64,15 +92,17 @@ Outlines (`stroke`) are turned into real geometry with the correct width, line c
 
 ### Booleans
 
-![Logo engraved into a block (left) and embossed onto a block (right)](docs/boolean.png)
+![The add-on logo engraved into a block (left) and embossed onto a block (right)](docs/boolean.png)
 
 The extruded meshes are closed solids, so the Exact boolean solver handles them reliably. The sidebar has one-click **Cut** (engrave) and **Add** (emboss) buttons.
 
 ### Depth per object (optional AI suggestions)
 
+![Multi-colored artwork with one object per color, stacked with Terrace by Order](docs/terrace.png)
+
 The collapsed **Depth per Object** section in the sidebar gives every selected object its own height (import with *Objects: Per Color* or *Per Shape* first):
 
-- **Terrace by Order**: each layer stands on the ground and is a bit higher than the one below it, as in the image at the top. No AI, no internet.
+- **Terrace by Order**: each layer stands on the ground and is a bit higher than the one below it, as in the image above. No AI, no internet.
 - **Suggest with AI** (optional): Claude (Anthropic) looks at a small preview of the selected objects and suggests a height and a base level for each of them, e.g. sky low, mountains higher, snow caps on top, a river cut into the land. An optional hint such as "keychain", "wall sign" or "stamp" steers the result. The reason for each height is shown for the active object, and **Re-apply** rescales everything to a new base depth.
 
 To use the AI suggestions, open *Edit > Preferences > Add-ons > SVG to Clean Mesh*, paste an Anthropic API key (or set the `ANTHROPIC_API_KEY` environment variable) and pick a model; Blender's *Allow Online Access* (Preferences > System > Network) must be enabled. Nothing is sent unless you press *Suggest with AI*. Each request sends a small preview image of the selected objects, their colors, names and sizes, and your hint; it is billed to your Anthropic account (typically a few cents).
@@ -182,7 +212,11 @@ The images in `docs/` are generated with `python tools/make_docs_images.py` (nee
 
 ### Making a release
 
-Bump `version` in `svg_to_mesh/blender_manifest.toml` (and `bl_info` in `__init__.py`) and push. The **Release** workflow runs the tests, builds the ZIP and publishes it as release `v<version>` (if that release does not exist yet). Pushing a tag `v<version>` or starting the workflow manually under *Actions* works too.
+Add a section for the new version to `CHANGELOG.md`, bump `version` in `svg_to_mesh/blender_manifest.toml` (and `bl_info` in `__init__.py`) and push. The **Release** workflow runs the tests, builds the ZIP and publishes it as release `v<version>` (if that release does not exist yet). Pushing a tag `v<version>` or starting the workflow manually under *Actions* works too.
+
+## Contributing
+
+Bug reports, sample SVGs that do not import well, and pull requests are welcome; please open an [issue](../../issues). If the add-on saves you time, a star on GitHub helps other Blender users find it.
 
 ## License
 

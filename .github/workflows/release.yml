@@ -59,6 +59,12 @@ jobs:
       - name: Build add-on ZIP
         if: steps.version.outputs.exists == 'false'
         run: python build.py
+      - name: Write release notes from CHANGELOG.md
+        if: steps.version.outputs.exists == 'false'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: python tools/release_notes.py "$VERSION" "$REPO" > dist/release_notes.md
 
       - name: Publish release
         if: steps.version.outputs.exists == 'false'
@@ -69,13 +75,4 @@ jobs:
           name: SVG to Clean Mesh v${{ steps.version.outputs.version }}
           files: dist/svg_to_mesh-${{ steps.version.outputs.version }}.zip
           fail_on_unmatched_files: true
-          body: |
-            Import SVG files and trace images (logos) into clean, manifold meshes that are ready for booleans.
-
-            ## Installation
-            1. Download **svg_to_mesh-${{ steps.version.outputs.version }}.zip** below (do not unzip it).
-            2. **Blender 4.2 and newer:** *Edit > Preferences > Get Extensions*, open the drop-down menu in the top right corner and choose *Install from Disk...*
-               **Blender 3.6 to 4.1:** *Edit > Preferences > Add-ons > Install...*, then enable the add-on.
-            3. Open the 3D Viewport sidebar (**N**), tab **SVG Mesh**, or use *File > Import*.
-
-            See the [README](https://github.com/${{ github.repository }}#readme) for usage and options.
+          body_path: dist/release_notes.md
