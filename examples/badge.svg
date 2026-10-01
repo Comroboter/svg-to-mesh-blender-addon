@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240" viewBox="0 0 240 240">
+  <!-- Example logo: badge with a star cut-out and a stroked arc -->
+  <style>
+    .badge { fill: #1d3557; }
+    .accent { fill: #e63946; }
+  </style>
+  <circle class="badge" cx="120" cy="120" r="110"/>
+  <circle cx="120" cy="120" r="88" fill="#ffffff"/>
+  <path class="accent" fill-rule="evenodd"
+        d="M120 42 L139 98 L198 98 L150 132 L168 190 L120 155 L72 190 L90 132 L42 98 L101 98 Z
+           M120 95 a22 22 0 1 0 0.01 0 Z"/>
+  <path d="M60 205 Q120 240 180 205" fill="none" stroke="#1d3557" stroke-width="9" stroke-linecap="round"/>
+</svg>

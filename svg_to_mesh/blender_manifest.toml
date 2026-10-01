@@ -1,0 +1,17 @@
+schema_version = "1.0.0"
+
+id = "svg_to_mesh"
+version = "1.0.0"
+name = "SVG to Clean Mesh"
+tagline = "Import SVGs and trace logos into clean, boolean-ready meshes"
+maintainer = "comroboter"
+type = "add-on"
+
+tags = ["Import-Export", "Mesh", "Modeling"]
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Import SVG and image files, optionally save traced SVG files"
