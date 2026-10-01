@@ -696,6 +696,42 @@ def render_terrace():
     save_gif(render_frames("terrace", frames, update), 70, "terrace.gif", dither=True, colors=192)
 
 
+def render_keychain():
+    """Keychain: colors stacked by order, base plate with a key ring hole, merged into one
+    solid; turns once (seamless loop)."""
+    from svg_to_mesh import depth_tools
+
+    frames = 6 if PREVIEW else 48
+    clear_scene()
+    setup_render(760, 430, 48)
+    objs = import_svg(os.path.join(EXAMPLES, "mountain_logo.svg"), separate="AUTO", depth=0.03,
+                      target_size=1.0, origin="CENTER")
+    ordered = depth_tools.paint_order(objs)
+    depth_tools.terrace(ordered, 0.022, 0.6)
+    pipeline.select_objects(bpy.context, objs)
+    bpy.ops.object.svgmesh_base_plate(margin=5.0, thickness=0.03, hole="TOP", hole_size=9.0)
+    plate = bpy.context.active_object
+    pipeline.select_objects(bpy.context, objs + [plate])
+    bpy.ops.object.svgmesh_merge_solid()
+    solid = bpy.context.active_object
+    for mat in solid.data.materials:
+        if mat is not None and mat.node_tree is not None:
+            mat.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.4
+    add_bevel(solid, 0.002)
+    pivot = bpy.data.objects.new("Pivot", None)
+    bpy.context.scene.collection.objects.link(pivot)
+    solid.parent = pivot
+    pivot.location.z = 0.03  # the plate hangs below z = 0: lift everything onto the floor
+    add_floor()
+    add_lights()
+    add_camera((0.0, -1.95, 2.2), (0.0, 0.06, 0.02), lens=50)
+
+    def update(t):
+        pivot.rotation_euler.z = math.radians(-360.0 * t)
+
+    save_gif(render_frames("keychain", frames, update), 70, "keychain.gif", dither=True, colors=192)
+
+
 def fig_logo_png():
     """Flat PNG versions of the logo (docs + Blender panel icon)."""
     clear_scene()
@@ -790,6 +826,7 @@ FIGURES = {
     "hero": render_logo_hero,
     "terrace": render_terrace,
     "boolean": render_boolean,
+    "keychain": render_keychain,
     "social": fig_social_preview,
 }
 

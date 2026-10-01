@@ -84,7 +84,9 @@ def _split(context, objs):
 
 
 def _selected_meshes(context):
-    return [o for o in context.selected_objects if o.type == "MESH" and o.data.vertices]
+    """Selected mesh objects, without base plates (they keep their own thickness)."""
+    return [o for o in context.selected_objects
+            if o.type == "MESH" and o.data.vertices and not o.get("svgmesh_plate")]
 
 
 class SVGMESH_OT_terrace(Operator):

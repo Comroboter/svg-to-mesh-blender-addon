@@ -11,6 +11,7 @@ from .depth_ops import (
     SVGMESH_OT_split_parts,
     SVGMESH_OT_terrace,
 )
+from .finish import SVGMESH_OT_base_plate, SVGMESH_OT_merge_solid
 from .operators import (
     SVGMESH_OT_boolean,
     SVGMESH_OT_curves_to_mesh,
@@ -58,6 +59,10 @@ class SVGMESH_PT_panel(bpy.types.Panel):
         op.operation = "DIFFERENCE"
         op = row.operator(SVGMESH_OT_boolean.bl_idname, text="Add", icon="SELECT_EXTEND")
         op.operation = "UNION"
+        col = layout.column(align=True)
+        col.label(text="Finish")
+        col.operator(SVGMESH_OT_base_plate.bl_idname, icon="MESH_PLANE")
+        col.operator(SVGMESH_OT_merge_solid.bl_idname, icon="AUTOMERGE_ON")
         layout.label(text="Tip: F9 adjusts the last import", icon="INFO")
         update_ops.draw_updates(layout, compact=True)
 

@@ -118,6 +118,15 @@ To use the AI suggestions, open *Edit > Preferences > Add-ons > SVG to Clean Mes
 
 Which model is enough? The task is mainly recognizing what the regions show and stacking them sensibly. Simple logos work with the small models (Haiku 4.5, small local models); for illustrations with many parts (faces, mascots) the larger models judge noticeably better. A request is small (two images of at most 512 pixels plus a list of regions, roughly 2,000 to 4,000 tokens in and 1,000 to 3,000 out including thinking), so even the largest Claude model costs only a few cents.
 
+### Base plate, key ring and one printable solid
+
+<p align="center"><img src="docs/keychain.gif" width="640" alt="A colorful logo with stacked layers on a base plate with a key ring hole, merged into one solid"></p>
+
+The **Finish** buttons in the sidebar turn the colors into a finished object:
+
+- **Add Base Plate**: a plate under the selected objects that follows their outline with a rounded margin (letter holes are filled). Optionally with a **key ring hole** in a tab at the top. Thickness 0 = automatic.
+- **Merge into One Solid**: unites all selected objects (colors, parts, plate) into one closed, manifold solid for 3D printing or booleans. The colors are kept as materials. Uses Blender's Manifold boolean solver (Blender 4.5+), the Exact solver in older versions.
+
 ### Image -> vector -> mesh
 
 <p align="center"><img src="docs/trace_steps.gif" width="420" alt="Tracing step by step: pixels, contour, Bezier curves, mesh"></p>

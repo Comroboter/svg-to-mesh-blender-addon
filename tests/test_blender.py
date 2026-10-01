@@ -15,6 +15,7 @@ import bmesh  # noqa: E402
 
 import svg_to_mesh  # noqa: E402
 from svg_to_mesh import depth_ops, mesh_builder, pipeline  # noqa: E402
+from svg_to_mesh.core.geometry import signed_area  # noqa: E402
 from svg_to_mesh.core.svg_parser import parse_svg  # noqa: E402
 
 EXAMPLE = os.path.join(os.path.dirname(__file__), "..", "examples", "badge.svg")
@@ -399,3 +400,51 @@ def test_ai_same_bottom_only_changes_thickness(monkeypatch):
         check_solid(o)
     assert bpy.ops.object.svgmesh_ai_depth(base_depth=0.02, flat_bottom=False) == {"FINISHED"}
     assert all(bottom_z(o) == pytest.approx(0.04) for o in objs)  # lifted by base 2.0
+
+
+SQUARES_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <path d="M0 0h40v40h-40z M10 10v20h20v-20z" fill="#ff0000" fill-rule="evenodd"/>
+  <rect x="40" y="0" width="40" height="40" fill="#0000ff"/></svg>"""
+
+
+def import_squares():
+    st = pipeline.ImportSettings(separate="AUTO", depth=0.1, scale_mode="REAL", unit_scale=0.01, origin="KEEP")
+    objs = pipeline.build_objects(bpy.context, parse_svg(SQUARES_SVG).shapes, st, "S")
+    assert len(objs) == 2
+    return objs
+
+
+def test_base_plate_follows_outline():
+    from svg_to_mesh import finish
+
+    objs = import_squares()
+    pipeline.select_objects(bpy.context, objs)
+    assert bpy.ops.object.svgmesh_base_plate(margin=0.0, thickness=0.05) == {"FINISHED"}
+    plate = bpy.context.active_object
+    assert plate.get("svgmesh_plate")
+    vol, _v, _f = check_solid(plate)
+    assert vol == pytest.approx(0.8 * 0.4 * 0.05, rel=1e-4)  # the hole of the red square is filled
+    assert top_z(plate) == pytest.approx(0.0) and bottom_z(plate) == pytest.approx(-0.05)
+    # with a margin and a key ring hole: still one closed solid, with exactly one hole
+    pipeline.select_objects(bpy.context, objs)
+    assert bpy.ops.object.svgmesh_base_plate(margin=5.0, thickness=0.05, hole="TOP") == {"FINISHED"}
+    plate2 = bpy.context.active_object
+    vol2 = check_solid(plate2)[0]
+    assert vol2 > vol
+    loops = finish.outline_loops([plate2])
+    assert sorted(signed_area(loop) > 0 for loop in loops) == [False, True]
+
+
+def test_merge_into_one_solid():
+    objs = import_squares()
+    objs[1].scale.z = 2.0  # the blue square is twice as thick
+    bpy.context.view_layer.update()
+    pipeline.select_objects(bpy.context, objs)
+    assert bpy.ops.object.svgmesh_merge_solid() == {"FINISHED"}
+    merged = bpy.context.active_object
+    vol = check_solid(merged)[0]
+    red = (0.16 - 0.04) * 0.1
+    blue = 0.16 * 0.2
+    assert vol == pytest.approx(red + blue, rel=1e-4)
+    assert {m.name for m in merged.data.materials} >= {"SVG #ff0000", "SVG #0000ff"}
+    assert len([o for o in bpy.data.objects if o.type == "MESH"]) == 1

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0
+
+- **Add Base Plate** (sidebar, Finish): a plate under the selected objects that follows their outline with a rounded margin, optionally with a tab and a **key ring hole**.
+- **Merge into One Solid** (sidebar, Finish): unites colors, parts and plate into one closed solid for 3D printing and booleans, keeping the colors as materials.
+- The depth tools leave base plates alone.
+
 ## 1.4.1
 
 - **Same Bottom** (new, on by default): the AI suggestions and *Re-apply* keep the bottom of every object at the same height and only make objects thicker or thinner. Turn it off to let the AI also lift or sink objects as before.
