@@ -19,7 +19,11 @@ permissions:
   contents: write
 
 jobs:
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   release:
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -47,15 +51,6 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install system libraries needed by the bpy module
-        if: steps.version.outputs.exists == 'false'
-        run: sudo apt-get update && sudo apt-get install -y libxrender1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libsm6 libgl1
-      - name: Install Python dependencies
-        if: steps.version.outputs.exists == 'false'
-        run: pip install pytest numpy bpy==5.0.1
-      - name: Run tests
-        if: steps.version.outputs.exists == 'false'
-        run: python -m pytest -v
       - name: Build add-on ZIP
         if: steps.version.outputs.exists == 'false'
         run: python build.py

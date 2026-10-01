@@ -20,7 +20,7 @@ from dataclasses import dataclass
 
 import bmesh
 from mathutils import Vector
-from mathutils.geometry import delaunay_2d_cdt
+from mathutils.geometry import delaunay_2d_cdt, tessellate_polygon
 from mathutils.kdtree import KDTree
 
 from .core.geometry import PolyShape, clean_polygon, signed_area, subdivide_polygon
@@ -250,7 +250,49 @@ def region_loops(tri, group, eps, faces=None):
     return loops
 
 
-def _ngons_from_loops(bm, loops, eps):
+def winding_number(pt, loops):
+    """Winding number of *pt* with respect to closed polygon loops."""
+    x, y = pt
+    w = 0
+    for loop in loops:
+        n = len(loop)
+        for i in range(n):
+            x1, y1 = loop[i]
+            x2, y2 = loop[(i + 1) % n]
+            if y1 <= y < y2 or y2 <= y < y1:
+                cross = (x2 - x1) * (y - y1) - (x - x1) * (y2 - y1)
+                if y1 <= y < y2 and cross > 0:
+                    w += 1
+                elif y2 <= y < y1 and cross < 0:
+                    w -= 1
+    return w
+
+
+def _interior_point(coords):
+    """A point strictly inside a simple polygon (centroid of its largest triangle)."""
+    tris = tessellate_polygon([[Vector((x, y, 0.0)) for x, y in coords]])
+    best, best_area = None, -1.0
+    for a, b, c in tris:
+        (ax, ay), (bx, by), (cx, cy) = coords[a], coords[b], coords[c]
+        area = abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax))
+        if area > best_area:
+            best, best_area = ((ax + bx + cx) / 3.0, (ay + by + cy) / 3.0), area
+    if best is None:
+        n = len(coords)
+        best = (sum(x for x, _y in coords) / n, sum(y for _x, y in coords) / n)
+    return best
+
+
+def _ngons_from_loops(bm, loops, eps, settings):
+    """Clean n-gons covering exactly the region bounded by *loops*.
+
+    The CDT (output type 5) splits the loops into valid BMesh faces and
+    bridges holes. Which faces belong to the region is decided here with
+    the winding number of the loops (outer loops CCW, holes CW), because
+    Blender's hole detection changed between versions (5.2 keeps hole faces
+    that 5.0 removed). If the kept faces do not add up to the exact region
+    area, the region is triangulated with our own CDT instead.
+    """
     verts = []
     faces = []
     for loop in loops:
@@ -258,8 +300,21 @@ def _ngons_from_loops(bm, loops, eps):
         verts.extend(loop)
         faces.append(list(range(base, base + len(loop))))
     out_verts, _e, out_faces, _ov, _oe, _of = delaunay_2d_cdt([Vector(v) for v in verts], [], faces, 5, eps)
-    bverts = [bm.verts.new((v.x, v.y, 0.0)) for v in out_verts]
-    for f in out_faces:
+    co = [(v.x, v.y) for v in out_verts]
+    kept = [f for f in out_faces if winding_number(_interior_point([co[i] for i in f]), loops) != 0]
+
+    region_area = abs(sum(signed_area(loop) for loop in loops))
+    kept_area = sum(abs(signed_area([co[i] for i in f])) for f in kept)
+    if abs(kept_area - region_area) > 1e-4 * region_area + eps * eps:
+        sub = triangulate([PolyShape(loops, "nonzero")], [0], [False], settings)
+        _faces_from_tri(bm, sub, 0)
+        return
+
+    bverts = [None] * len(co)
+    for f in kept:
+        for i in f:
+            if bverts[i] is None:
+                bverts[i] = bm.verts.new((co[i][0], co[i][1], 0.0))
         try:
             bm.faces.new([bverts[i] for i in f])
         except ValueError:
@@ -296,7 +351,7 @@ def build_bmesh(tri, group, settings, faces=None):
         return bm
 
     if settings.topology == "NGON":
-        _ngons_from_loops(bm, loops, eps)
+        _ngons_from_loops(bm, loops, eps, settings)
     else:
         # re-triangulate the clean outline (optionally with evenly spaced
         # inner points); constrained Delaunay gives well-shaped triangles
@@ -304,7 +359,8 @@ def build_bmesh(tri, group, settings, faces=None):
         uniform = settings.topology in ("UNIFORM", "QUADS")
         sub = triangulate([region], [0], [False], settings, uniform=uniform)
         _faces_from_tri(bm, sub, 0)
-        bmesh.ops.dissolve_degenerate(bm, dist=eps, edges=bm.edges[:])
+        # (no dissolve_degenerate here: the CDT already merges vertices closer than eps,
+        # and on hair-thin strips it removed valid triangles)
         if settings.topology == "QUADS":
             bmesh.ops.join_triangles(
                 bm, faces=bm.faces[:], cmp_seam=False, cmp_sharp=False, cmp_uvs=False,

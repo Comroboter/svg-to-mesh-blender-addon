@@ -732,7 +732,7 @@ def fig_social_preview():
              "engraving and 3D printing."]
     for i, line in enumerate(lines):
         fig.text(0.485, 0.41 - i * 0.075, line, fontsize=21, color="#33415c")
-    fig.text(0.485, 0.12, "Blender 3.6 - 5.0  |  GPL-3.0", fontsize=16, color="#6b7a90")
+    fig.text(0.485, 0.12, "Blender 3.6 - 5.2  |  GPL-3.0", fontsize=16, color="#6b7a90")
     path = os.path.join(DOCS, "social_preview.png")
     fig.savefig(path, dpi=100, facecolor=fig.get_facecolor())
     plt.close(fig)

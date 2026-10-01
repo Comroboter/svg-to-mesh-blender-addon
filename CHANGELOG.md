@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.1
+
+- Fix for Blender 5.2: with the default *Clean N-Gons* topology, holes could be filled and letters with holes (O, R, B ...) could disappear. Blender 5.2 changed how its triangulation reports holes; the add-on now decides holes itself, identically in every Blender version, and falls back to its own triangulation if the result does not match the exact area.
+- *Triangles* mode no longer drops valid triangles on hair-thin shapes.
+- The automatic tests now also run inside Blender 5.2 LTS, and releases require them to pass.
+
 ## 1.2.0
 
 - Much better tracing of small images such as logos from websites: anti-aliased images under about 1000 pixels are enlarged internally first, so thin lines, small text and letter holes survive instead of turning into zigzags or disappearing.

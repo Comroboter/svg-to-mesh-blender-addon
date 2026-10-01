@@ -3,6 +3,7 @@ name: Tests
 on:
   push:
   pull_request:
+  workflow_call:  # used by the release workflow
 
 permissions:
   contents: read
@@ -23,3 +24,32 @@ jobs:
         run: pip install pytest numpy bpy==5.0.1
       - name: Run tests (core + Blender integration)
         run: python -m pytest -v
+
+  # The bpy wheel lags behind Blender releases; run the same tests inside the
+  # real Blender LTS build too, because API behaviour can change between
+  # versions (e.g. the CDT hole handling in 5.2).
+  blender-lts:
+    name: Tests in Blender 5.2 LTS
+    runs-on: ubuntu-latest
+    env:
+      BLENDER_VERSION: "5.2.1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Install system libraries needed by Blender
+        run: sudo apt-get update && sudo apt-get install -y libxrender1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libsm6 libgl1 libegl1
+      - name: Download Blender
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/blender.tar.xz" \
+            "https://download.blender.org/release/Blender${BLENDER_VERSION%.*}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          tar -xf "$RUNNER_TEMP/blender.tar.xz" -C "$RUNNER_TEMP"
+          echo "BLENDER_DIR=$RUNNER_TEMP/blender-${BLENDER_VERSION}-linux-x64" >> "$GITHUB_ENV"
+      - name: Install pytest for Blender's Python
+        run: |
+          PY=$(ls "$BLENDER_DIR"/*/python/bin/python3* | head -1)
+          "$PY" -m pip install --target "$RUNNER_TEMP/blender-site" pytest
+      - name: Run tests inside Blender
+        run: |
+          "$BLENDER_DIR/blender" -b --factory-startup --python-exit-code 1 --python-expr \
+            "import sys; sys.path[:0] = ['$RUNNER_TEMP/blender-site', '.']; import pytest; sys.exit(int(pytest.main(['-v', '-p', 'no:cacheprovider', 'tests'])))"

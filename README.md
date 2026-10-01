@@ -13,7 +13,7 @@
   <a href="../../releases/latest"><img src="https://img.shields.io/github/v/release/Comroboter/svg-to-mesh-blender-addon?label=download&color=e63946" alt="Latest release"></a>
   <a href="../../releases"><img src="https://img.shields.io/github/downloads/Comroboter/svg-to-mesh-blender-addon/total?color=457b9d" alt="Downloads"></a>
   <a href="../../actions/workflows/tests.yml"><img src="https://github.com/Comroboter/svg-to-mesh-blender-addon/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
-  <img src="https://img.shields.io/badge/Blender-3.6%20to%205.0-1d3557?logo=blender&logoColor=white" alt="Blender 3.6 to 5.0">
+  <img src="https://img.shields.io/badge/Blender-3.6%20to%205.2-1d3557?logo=blender&logoColor=white" alt="Blender 3.6 to 5.2">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-a8dadc" alt="License: GPL-3.0"></a>
 </p>
 
@@ -133,7 +133,7 @@ Multi-colored images are split into one mesh per color:
    - **Blender 4.2 and newer:** *Edit > Preferences > Get Extensions*, open the drop-down menu in the top right corner, choose *Install from Disk...* and select the ZIP.
    - **Blender 3.6 to 4.1:** *Edit > Preferences > Add-ons > Install...*, select the ZIP and enable the checkbox.
 
-Tested with Blender 5.0. Minimum version is 3.6.
+Tested with Blender 5.0 and 5.2 LTS. Minimum version is 3.6.
 
 ## Usage
 
@@ -207,7 +207,7 @@ pip install pytest numpy bpy==5.0.1   # bpy = Blender as a Python module (for th
 python -m pytest
 ```
 
-The tests in `tests/test_blender.py` run against real Blender through the `bpy` module and check, among other things, that the solids are manifold, that volumes are correct and that booleans work. Without `bpy` they are skipped.
+The tests in `tests/test_blender.py` run against real Blender, through the `bpy` module and on GitHub also inside Blender 5.2 LTS, and check, among other things, that the solids are manifold, that volumes are correct and that booleans work. Without `bpy` they are skipped.
 
 The images in `docs/` are generated with `python tools/make_docs_images.py` (needs `bpy` and `matplotlib`; the 3D images are rendered with Cycles).
 

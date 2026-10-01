@@ -4,7 +4,7 @@ boolean-ready meshes."""
 bl_info = {
     "name": "SVG to Clean Mesh",
     "author": "comroboter",
-    "version": (1, 2, 0),
+    "version": (1, 2, 1),
     "blender": (3, 6, 0),
     "location": "File > Import, 3D Viewport > Sidebar > SVG Mesh",
     "description": "Import SVG files and trace images (logos) into clean, manifold meshes ready for booleans",
