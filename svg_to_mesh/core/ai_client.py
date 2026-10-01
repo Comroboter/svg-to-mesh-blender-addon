@@ -1,9 +1,10 @@
-"""Optional AI depth suggestions through the Claude API (Anthropic).
+"""Optional AI depth suggestions: Claude (Anthropic), OpenAI or compatible
+servers (LM Studio, OpenRouter ...), or a local Ollama.
 
 This module only uses the Python standard library: Blender add-ons cannot
-rely on third-party packages (the official ``anthropic`` SDK needs compiled,
-platform-specific dependencies), so the Messages API is called over HTTPS
-with ``urllib``.  Nothing in here imports ``bpy``.
+rely on third-party packages (the official SDKs need compiled,
+platform-specific dependencies), so the APIs are called over HTTP(S) with
+``urllib``.  Nothing in here imports ``bpy``.
 """
 
 import base64
@@ -12,19 +13,31 @@ import socket
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+from dataclasses import dataclass, field
 
 API_URL = "https://api.anthropic.com/v1/messages"
 API_VERSION = "2023-06-01"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 DEFAULT_MODEL = "claude-opus-5-5"
 
-# (model id, label, description) - Claude Opus 5.5 is the default
+# (model id, label, description) - Claude Opus 5.5 is the default. The costs
+# are estimates for a typical request (two small preview images, ~20 regions).
 MODELS = [
-    ("claude-opus-5-5", "Claude Opus 5.5", "Best results (default)"),
-    ("claude-sonnet-5-5", "Claude Sonnet 5.5", "Faster and cheaper"),
-    ("claude-haiku-4-5", "Claude Haiku 4.5", "Fastest and cheapest"),
+    ("claude-opus-5-5", "Claude Opus 5.5", "Best judgement for illustrations (about 3-8 cents per request)"),
+    ("claude-sonnet-5-5", "Claude Sonnet 5.5", "Very good for most logos (about 2-4 cents per request)"),
+    ("claude-haiku-4-5", "Claude Haiku 4.5", "Simple logos, fastest (about 0.5-1 cent per request)"),
 ]
+
+# (id, label, description)
+PROVIDERS = [
+    ("ANTHROPIC", "Claude (Anthropic)", "Anthropic API, needs an API key"),
+    ("OPENAI", "OpenAI or compatible", "OpenAI API, or any OpenAI-compatible server such as LM Studio or OpenRouter"),
+    ("OLLAMA", "Ollama (local)", "Free, runs on your computer; needs a vision model such as gemma3 or qwen2.5vl"),
+]
+DEFAULT_URLS = {"OPENAI": "https://api.openai.com/v1", "OLLAMA": "http://localhost:11434"}
+DEFAULT_MODELS = {"ANTHROPIC": DEFAULT_MODEL, "OPENAI": "gpt-5-mini", "OLLAMA": "gemma3"}
 
 # Value ranges the suggestions are clamped to (JSON schema in structured
 # outputs does not support numeric limits, so they are enforced here).
@@ -46,7 +59,8 @@ Aim for a 3D version that reads well and looks intentional:
 - keep the steps between neighbouring layers moderate (about 0.3 to 1.5 D) unless the design needs drama.
 
 Regions lying inside another region should usually end above or below that region's top, never at exactly the same height.
-Use the preview image to understand what the regions depict. Give one entry for every region id, and keep each reason short (under 15 words)."""
+Several regions can have the same color: they are separate parts of that color (for example a mustache and the outlines). Judge every part on its own.
+Use the preview images to understand what the regions depict. Give one entry for every region id, and keep each reason short (under 15 words)."""
 
 RESPONSE_SCHEMA = {
     "type": "object",
@@ -76,27 +90,80 @@ class AIError(Exception):
     """A user-facing error message (no traceback needed)."""
 
 
-def build_request(regions, png_bytes, hint="", model=DEFAULT_MODEL):
-    """Return (headers_without_key, body) for the Messages API.
+@dataclass
+class Request:
+    provider: str
+    url: str
+    body: dict
+    headers: dict = field(default_factory=dict)
 
-    regions: list of dicts with at least ``id``, ``color`` and ``area_percent``
-    (plus optional ``name``, ``bbox_px``, ``center_px``, ``layer``).
-    """
+
+def _prompt_text(regions, hint, with_map):
     lines = [
-        "The preview image shows the artwork from above (gray = empty space). "
-        "Pixel coordinates start at the top left. Regions (layer = paint order, 0 = bottom):",
+        "The first image shows the artwork from above (gray = empty space). "
+        "Pixel coordinates start at the top left.",
+    ]
+    if with_map:
+        lines.append("The second image is a region map: every region is filled with its own flat color, "
+                     "given as map_color below.")
+    lines += [
+        "Regions (layer = paint order, 0 = bottom):",
         json.dumps(regions, indent=1, sort_keys=True),
     ]
     if hint.strip():
         lines.append("What the user wants to make: " + hint.strip())
     lines.append("Suggest height and base for every region.")
-    content = [
-        {
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": base64.b64encode(png_bytes).decode("ascii")},
-        },
-        {"type": "text", "text": "\n".join(lines)},
-    ]
+    return "\n".join(lines)
+
+
+def _b64(png):
+    return base64.b64encode(png).decode("ascii")
+
+
+def build_request(regions, images, hint="", model=None, provider="ANTHROPIC", base_url=""):
+    """Return a Request (without credentials) for the chosen provider.
+
+    regions: list of dicts with at least ``id``, ``color`` and ``area_percent``
+    (plus optional ``name``, ``bbox_px``, ``layer``, ``map_color``).
+    images: PNG bytes of the preview, optionally followed by the region map.
+    """
+    if isinstance(images, (bytes, bytearray)):
+        images = [images]
+    text = _prompt_text(regions, hint, len(images) > 1)
+    model = model or DEFAULT_MODELS.get(provider, "")
+    base = (base_url or DEFAULT_URLS.get(provider, "")).rstrip("/")
+    headers = {"content-type": "application/json"}
+
+    if provider == "OPENAI":
+        content = [{"type": "text", "text": text}]
+        content += [{"type": "image_url", "image_url": {"url": "data:image/png;base64," + _b64(png)}} for png in images]
+        body = {
+            "model": model,
+            "messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": content}],
+            "response_format": {"type": "json_schema", "json_schema": {
+                "name": "depth_suggestions", "strict": True, "schema": RESPONSE_SCHEMA}},
+        }
+        # the official API wants max_completion_tokens, most compatible servers max_tokens
+        official = urllib.parse.urlsplit(base).hostname == "api.openai.com"
+        body["max_completion_tokens" if official else "max_tokens"] = 16000
+        return Request(provider, base + "/chat/completions", body, headers)
+
+    if provider == "OLLAMA":
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": text, "images": [_b64(png) for png in images]},
+            ],
+            "format": RESPONSE_SCHEMA,
+            "stream": False,
+            "options": {"temperature": 0.2},
+        }
+        return Request(provider, base + "/api/chat", body, headers)
+
+    content = [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": _b64(png)}}
+               for png in images]
+    content.append({"type": "text", "text": text})
     body = {
         "model": model,
         "max_tokens": 16000,
@@ -104,28 +171,50 @@ def build_request(regions, png_bytes, hint="", model=DEFAULT_MODEL):
         "messages": [{"role": "user", "content": content}],
         "output_config": {"format": {"type": "json_schema", "schema": RESPONSE_SCHEMA}},
     }
-    headers = {"content-type": "application/json", "anthropic-version": API_VERSION}
+    headers["anthropic-version"] = API_VERSION
     if model.startswith(("claude-opus-5", "claude-sonnet-5")):
         # effort is not supported on Haiku 4.5; refusal fallback only exists on the 5.x models
         body["output_config"]["effort"] = "medium"
         body["fallbacks"] = "default"
         headers["anthropic-beta"] = FALLBACK_BETA
-    return headers, body
+    return Request("ANTHROPIC", API_URL, body, headers)
 
 
-def parse_response(data, region_ids):
-    """Validate an API response and return (suggestions, summary).
-
-    suggestions: {region id: (height, base, reason)}, clamped to sane ranges.
-    """
+def response_text(data, provider="ANTHROPIC"):
+    """The JSON text of a response; raises AIError for refusals and cut-off answers."""
+    if provider == "OPENAI":
+        choice = (data.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        if message.get("refusal"):
+            raise AIError("The AI declined this request.")
+        if choice.get("finish_reason") == "length":
+            raise AIError("The AI answer was cut off - please try again.")
+        return message.get("content") or ""
+    if provider == "OLLAMA":
+        if data.get("done_reason") == "length":
+            raise AIError("The AI answer was cut off - please try again.")
+        return (data.get("message") or {}).get("content") or ""
     stop = data.get("stop_reason")
     if stop == "refusal":
         raise AIError("The AI declined this request.")
     if stop == "max_tokens":
         raise AIError("The AI answer was cut off - please try again.")
-    text = next((b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"), "")
+    return next((b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"), "")
+
+
+def parse_response(data, region_ids, provider="ANTHROPIC"):
+    """Validate an API response and return (suggestions, summary).
+
+    suggestions: {region id: (height, base, reason)}, clamped to sane ranges.
+    """
+    text = response_text(data, provider).strip()
+    if text.startswith("```"):  # some local models wrap JSON in a code fence
+        text = text.strip("`")
+        text = text[text.find("{"):]
     try:
         result = json.loads(text)
+        if not isinstance(result, dict):
+            raise ValueError
     except ValueError:
         raise AIError("The AI answer could not be read.") from None
     out = {}
@@ -173,27 +262,43 @@ _STATUS_MESSAGES = {
 }
 
 
-def call_api(api_key, headers, body, timeout=180, retries=2, sleep=time.sleep):
-    """POST to the Messages API and return the decoded JSON response.
+def _error_detail(ex):
+    try:
+        err = json.loads(ex.read().decode("utf-8")).get("error", "")
+    except Exception:  # noqa: BLE001
+        return ""
+    if isinstance(err, dict):
+        err = err.get("message", "")
+    return str(err)[:300]
+
+
+def call_api(request, api_key="", timeout=None, retries=2, sleep=time.sleep):
+    """Send *request* (see build_request) and return the decoded JSON response.
 
     Retries rate limits (429), overload (529), server errors (5xx) and
     connection problems with a short backoff.
     """
-    data = json.dumps(body).encode("utf-8")
-    hdrs = dict(headers)
-    hdrs["x-api-key"] = api_key
+    scheme = urllib.parse.urlsplit(request.url).scheme
+    if scheme not in ("http", "https"):
+        raise AIError("The server address must start with http:// or https://")
+    if timeout is None:
+        timeout = 600 if request.provider == "OLLAMA" else 180  # local models can be slow
+    data = json.dumps(request.body).encode("utf-8")
+    hdrs = dict(request.headers)
+    if request.provider == "ANTHROPIC":
+        hdrs["x-api-key"] = api_key
+    elif api_key:
+        hdrs["authorization"] = "Bearer " + api_key
+    context = _ssl_context() if scheme == "https" else None
     attempt = 0
     while True:
-        req = urllib.request.Request(API_URL, data=data, headers=hdrs, method="POST")
+        req = urllib.request.Request(request.url, data=data, headers=hdrs, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
+            with urllib.request.urlopen(req, timeout=timeout, context=context) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as ex:
             status = ex.code
-            try:
-                detail = json.loads(ex.read().decode("utf-8")).get("error", {}).get("message", "")
-            except Exception:  # noqa: BLE001
-                detail = ""
+            detail = _error_detail(ex)
             retryable = status in (408, 409, 429, 529) or status >= 500
             if retryable and attempt < retries:
                 attempt += 1
@@ -204,6 +309,8 @@ def call_api(api_key, headers, body, timeout=180, retries=2, sleep=time.sleep):
                 sleep(min(delay, 20.0))
                 continue
             msg = _STATUS_MESSAGES.get(status, "The API returned an error (HTTP %d)" % status)
+            if request.provider == "OLLAMA" and status == 404:
+                msg = "Model not found - download it first with 'ollama pull %s'" % request.body.get("model", "")
             if status == 401:
                 detail = ""  # the API message only repeats ours
             raise AIError(msg + (": " + detail if detail else "")) from None
@@ -213,4 +320,8 @@ def call_api(api_key, headers, body, timeout=180, retries=2, sleep=time.sleep):
                 sleep(2 ** attempt)
                 continue
             reason = getattr(ex, "reason", ex)
+            if request.provider == "OLLAMA":
+                raise AIError("Could not reach Ollama at %s - is it running? (%s)" % (request.url, reason)) from None
             raise AIError("Could not reach the API: %s" % reason) from None
+        except ValueError:
+            raise AIError("The server did not answer with JSON - check the server address") from None

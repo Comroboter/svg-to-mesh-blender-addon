@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0
+
+- **Colorful SVGs import in color by default.** The new *Objects: Auto* setting creates one object per color when the artwork has several colors, and a single object for one-color logos.
+- **Smarter white:** the new default *White: Background Only* removes white backgrounds (also where they show through letter holes) but keeps enclosed white such as eyes or a penguin's belly. *Always a Hole* and *Keep* are still available.
+- Fixed missing pieces (for example a strip of the Tux belly) and rare open edges next to hair-thin triangles in *Per Color* objects.
+- **Split into Parts** (sidebar, Depth per Object): splits objects into their separate parts so every part can get its own height; tiny parts stay together. *Split Parts First* does this before the AI suggestions.
+- **AI suggestions** now also work with **OpenAI** (and OpenAI-compatible servers such as LM Studio or OpenRouter) and a local, free **Ollama**. The AI also gets a map of the regions, so parts of the same color can be told apart.
+- The add-on preferences show an estimated cost per request for each Claude model.
+
 ## 1.3.1
 
 - *Check for Updates* now reads the installed version correctly when the add-on is installed as an extension (Blender 4.2+); 1.3.0 always reported an update there.

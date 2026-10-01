@@ -100,14 +100,23 @@ The extruded meshes are closed solids, so the Exact boolean solver handles them 
 
 <p align="center"><img src="docs/terrace.gif" width="640" alt="Multi-colored artwork with one object per color, rising into terraces"></p>
 
-The collapsed **Depth per Object** section in the sidebar gives every selected object its own height (import with *Objects: Per Color* or *Per Shape* first):
+The collapsed **Depth per Object** section in the sidebar gives every selected object its own height (colorful artwork is imported as one object per color by default):
 
 - **Terrace by Order**: each layer stands on the ground and is a bit higher than the one below it, as in the image above. No AI, no internet.
-- **Suggest with AI** (optional): Claude (Anthropic) looks at a small preview of the selected objects and suggests a height and a base level for each of them, e.g. sky low, mountains higher, snow caps on top, a river cut into the land. An optional hint such as "keychain", "wall sign" or "stamp" steers the result. A progress bar shows while Claude is answering (usually 10 to 40 seconds); it can be cancelled. The reason for each height is shown for the active object, and **Re-apply** rescales everything to a new base depth.
+- **Split into Parts**: splits objects into their separate parts, so that for example a mustache can get another height than the eyes of the same color. Tiny parts stay together in one "details" object. Parts that touch each other stay together; separate those in Edit Mode (select with *L*, then *P > Selection*).
+- **Suggest with AI** (optional): an AI looks at a small preview of the selected objects and suggests a height and a base level for each of them, e.g. sky low, mountains higher, snow caps on top, a river cut into the land. An optional hint such as "keychain", "wall sign" or "stamp" steers the result, and *Split Parts First* lets it judge every part on its own. A progress bar shows while the AI is answering (usually 10 to 40 seconds); it can be cancelled. The reason for each height is shown for the active object, and **Re-apply** rescales everything to a new base depth.
 
 *Base Depth* is the thickness that height 1.0 corresponds to. Leave it at 0 (automatic) to use the current thickness of the selected objects, also after scaling them.
 
-To use the AI suggestions, open *Edit > Preferences > Add-ons > SVG to Clean Mesh*, paste an Anthropic API key (or set the `ANTHROPIC_API_KEY` environment variable) and pick a model; Blender's *Allow Online Access* (Preferences > System > Network) must be enabled. Nothing is sent unless you press *Suggest with AI*. Each request sends a small preview image of the selected objects, their colors, names and sizes, and your hint; it is billed to your Anthropic account (typically a few cents).
+To use the AI suggestions, open *Edit > Preferences > Add-ons > SVG to Clean Mesh* and choose an **AI Service**; Blender's *Allow Online Access* (Preferences > System > Network) must be enabled. Nothing is sent unless you press *Suggest with AI*. Each request sends two small preview images of the selected objects (the artwork and a map of the regions), their colors, names and sizes, and your hint.
+
+| AI Service | Setup | Cost per request (estimate) |
+|---|---|---|
+| **Claude (Anthropic)** | API key from platform.claude.com (or `ANTHROPIC_API_KEY`) | Opus 5.5 about 3-8 cents, Sonnet 5.5 about 2-4 cents, Haiku 4.5 under 1 cent |
+| **OpenAI or compatible** | API key from platform.openai.com (or `OPENAI_API_KEY`), any vision model; also LM Studio, OpenRouter and other OpenAI-compatible servers via *Server* | depends on the model |
+| **Ollama (local)** | Install Ollama and run `ollama pull gemma3` (or another vision model such as `qwen2.5vl`) | free, runs on your computer |
+
+Which model is enough? The task is mainly recognizing what the regions show and stacking them sensibly. Simple logos work with the small models (Haiku 4.5, small local models); for illustrations with many parts (faces, mascots) the larger models judge noticeably better. A request is small (two images of at most 512 pixels plus a list of regions, roughly 2,000 to 4,000 tokens in and 1,000 to 3,000 out including thinking), so even the largest Claude model costs only a few cents.
 
 ### Image -> vector -> mesh
 
@@ -165,9 +174,9 @@ The panel lives in the **3D Viewport > Sidebar (N) > "SVG Mesh" tab**. Alternati
 | Grid Size | Cell size for Uniform/Quads, relative to the object size |
 | Curve Precision | Maximum deviation from the true curve (in % of the size). Smaller = rounder |
 | Extrude / Depth / Center Depth | Thickness of the solid, optionally symmetric around Z=0 |
-| Objects | Single object / per color / per shape |
+| Objects | *Auto* (one object for single-color artwork, one per color otherwise) / single object / per color / per shape |
 | Overlaps | *Visible Only* (how the SVG looks) or *Union* (every shape complete) |
-| White = Hole | White areas become holes or are ignored. Turn it off for illustrations with white parts (eyes, belly ...) |
+| White | *Background Only* (default): white that touches the outside, such as a background rectangle, is removed, also where it shows through letter holes; enclosed white (eyes, white letters) is kept. *Always a Hole*: every white area is a cut-out. *Keep*: white is solid like any color |
 | Skip Effects | Leave out strongly blurred shapes (shadows, glows, highlights) |
 | Min Opacity | Leave out fills and strokes more transparent than this (shading layers) |
 | Layer Offset | Z offset between separated objects |
@@ -183,7 +192,6 @@ The panel lives in the **3D Viewport > Sidebar (N) > "SVG Mesh" tab**. Alternati
 
 - SVG `<text>` is not supported. Convert text to paths first (Inkscape: *Path > Object to Path*) or use Blender text with *Curves to Clean Mesh*.
 - Gradients become the average of their colors. `mask`, patterns and dashes (`stroke-dasharray`) are ignored; filters are only used to recognize soft effects (see *Skip Effects*).
-- For colorful illustrations use *Objects: Per Color* and turn off *White = Hole*.
 - Tracing is meant for logos, icons and graphics with clear color areas, not for photos.
 - Very large or deeply nested files are rejected (more than 200,000 elements after expanding `<use>`, or more than 400 nesting levels) to protect against malicious files.
 

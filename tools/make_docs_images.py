@@ -671,7 +671,7 @@ def render_terrace():
     clear_scene()
     setup_render(760, 430, 48)
     objs = import_svg(os.path.join(EXAMPLES, "mountain_logo.svg"), separate="COLOR", depth=0.03,
-                      ignore_white=False, target_size=1.0, origin="CENTER")
+                      white="KEEP", target_size=1.0, origin="CENTER")
     pivot = bpy.data.objects.new("Pivot", None)
     bpy.context.scene.collection.objects.link(pivot)
     for o in objs:

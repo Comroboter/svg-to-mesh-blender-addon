@@ -44,6 +44,39 @@ class TriangulationResult:
     groups: list  # per face: set of group ids
 
 
+AUTO = "AUTO"  # knockout value: a hole only where the shape is background
+
+
+def _background_shapes(faces, adjacency, covers, knockout, shown):
+    """AUTO knockout shapes (white) that reach the outside of the drawing.
+
+    Starting from empty triangles, walk through triangles that show nothing
+    but AUTO shapes; every AUTO shape met on the way is background (a white
+    rectangle behind a logo, including the parts seen through letter holes),
+    while white enclosed by other colors (eyes, belly, white letters) is not.
+    """
+    def only_auto(fi):
+        vis = shown(covers[fi])
+        return bool(vis) and all(knockout[s] == AUTO for s in vis)
+
+    if not any(k == AUTO for k in knockout):
+        return set()
+    empty = [fi for fi, cov in enumerate(covers) if not any(not knockout[s] or knockout[s] == AUTO for s in shown(cov))]
+    seen = set(empty)
+    queue = deque(empty)
+    background = set()
+    while queue:
+        fi = queue.popleft()
+        a, b, c = faces[fi]
+        for u, v in ((a, b), (b, c), (c, a)):
+            for gi in adjacency[(u, v) if u < v else (v, u)]:
+                if gi not in seen and only_auto(gi):
+                    seen.add(gi)
+                    background.update(shown(covers[gi]))
+                    queue.append(gi)
+    return background
+
+
 def _filled(rule, w):
     return (w & 1) == 1 if rule == "evenodd" else w != 0
 
@@ -53,7 +86,9 @@ def triangulate(poly_shapes, group_of, knockout, settings, uniform=False):
 
     poly_shapes: list of PolyShape (paint order).
     group_of:    group id per shape.
-    knockout:    per shape, True if the shape cuts away what lies below it.
+    knockout:    per shape, True if the shape cuts away what lies below it,
+                 AUTO if it only does so where it is background (see
+                 _background_shapes).
 
     Clip paths (PolyShape.clips) are added as extra, invisible shapes: a shape
     only covers a triangle if its own fill rule holds there and every one of
@@ -118,14 +153,18 @@ def triangulate(poly_shapes, group_of, knockout, settings, uniform=False):
     for i, (a, b) in enumerate(out_edges):
         edge_index[(a, b) if a < b else (b, a)] = i
 
-    # make triangles counter-clockwise
-    faces = []
+    # make triangles counter-clockwise. The CDT orients all its faces the
+    # same way, so decide once for all of them: judging each triangle on its
+    # own would flip near-degenerate slivers at random and break the
+    # adjacency walks below.
+    signed = 0.0
     for f in out_faces:
-        a, b, c = f[0], f[1], f[2]
-        (ax, ay), (bx, by), (cx, cy) = ov[a], ov[b], ov[c]
-        if (bx - ax) * (cy - ay) - (by - ay) * (cx - ax) < 0:
-            a, b, c = a, c, b
-        faces.append((a, b, c))
+        (ax, ay), (bx, by), (cx, cy) = ov[f[0]], ov[f[1]], ov[f[2]]
+        signed += (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+    if signed >= 0:
+        faces = [(f[0], f[1], f[2]) for f in out_faces]
+    else:
+        faces = [(f[0], f[2], f[1]) for f in out_faces]
 
     adjacency = {}
     for fi, (a, b, c) in enumerate(faces):
@@ -172,22 +211,30 @@ def triangulate(poly_shapes, group_of, knockout, settings, uniform=False):
                     winding[gi] = nw
                 queue.append(gi)
 
-    groups = []
+    # per triangle: covering shapes (only painted ones whose clip paths allow it)
+    covers = []
     for w in winding:
+        if not w:
+            covers.append([])
+            continue
+        filled = {s for s, n in w.items() if _filled(shapes[s].fill_rule, n)}
+        covers.append(sorted(
+            s for s in filled
+            if s < n_painted and all(any(a in filled for a in grp) for grp in clip_groups[s])
+        ))
+    visible = settings.overlap == "VISIBLE"
+
+    def shown(cov):
+        return cov[-1:] if visible else cov
+
+    background = _background_shapes(faces, adjacency, covers, knockout, shown)
+    groups = []
+    for cov in covers:
         g = set()
-        if w:
-            filled = {s for s, n in w.items() if _filled(shapes[s].fill_rule, n)}
-            covering = [
-                s for s in filled
-                if s < n_painted and all(any(a in filled for a in grp) for grp in clip_groups[s])
-            ]
-            if covering:
-                if settings.overlap == "VISIBLE":
-                    top = max(covering)
-                    if not knockout[top]:
-                        g.add(group_of[top])
-                else:
-                    g.update(group_of[s] for s in covering if not knockout[s])
+        for s in shown(cov):
+            k = knockout[s]
+            if not k or (k == AUTO and s not in background):
+                g.add(group_of[s])
         groups.append(g)
     return TriangulationResult(ov, faces, groups)
 
@@ -230,15 +277,12 @@ def faces_by_group(tri):
     return out
 
 
-def region_loops(tri, group, eps, faces=None):
-    """Boundary loops of the triangles of *group* (outer CCW, holes CW).
+def _index_loops(tri, faces):
+    """Boundary loops (vertex indices) of the triangles *faces*.
 
     Walking around each vertex through its triangle fan keeps regions that
-    touch in a single point as separate loops.  Vertices that only lie on a
-    straight line (left over from hidden shapes) are removed.
+    touch in a single point as separate loops.
     """
-    if faces is None:
-        faces = [fi for fi, g in enumerate(tri.groups) if group in g]
     third = {}
     for fi in faces:
         a, b, c = tri.faces[fi]
@@ -264,9 +308,25 @@ def region_loops(tri, group, eps, faces=None):
         cur = e
         while cur not in seen and cur in nxt:
             seen.add(cur)
-            loop.append(tri.verts[cur[0]])
+            loop.append(cur[0])
             cur = nxt[cur]
-        loop = clean_polygon(loop, eps, closed=True)
+        loops.append(loop)
+    return loops
+
+
+def _group_faces(tri, group, faces):
+    return faces if faces is not None else [fi for fi, g in enumerate(tri.groups) if group in g]
+
+
+def region_loops(tri, group, eps, faces=None):
+    """Boundary loops of the triangles of *group* (outer CCW, holes CW).
+
+    Vertices that only lie on a straight line (left over from hidden shapes)
+    are removed.
+    """
+    loops = []
+    for idx in _index_loops(tri, _group_faces(tri, group, faces)):
+        loop = clean_polygon([tri.verts[i] for i in idx], eps, closed=True)
         if len(loop) >= 3 and abs(signed_area(loop)) > eps * eps:
             loops.append(loop)
     return loops
@@ -361,17 +421,8 @@ def _faces_from_tri(bm, tri, group):
             pass
 
 
-def build_bmesh(tri, group, settings, faces=None):
-    """Create a bmesh for one group of a TriangulationResult.
-
-    *faces* optionally lists the face indices of the group (see faces_by_group).
-    """
-    eps = max(settings.merge_distance, 1e-9)
-    bm = bmesh.new()
-    loops = region_loops(tri, group, eps, faces)
-    if not loops:
-        return bm
-
+def _flat_faces(bm, loops, eps, settings):
+    """Fill the region bounded by *loops* with faces in the chosen topology (z=0)."""
     if settings.topology == "NGON":
         _ngons_from_loops(bm, loops, eps, settings)
     else:
@@ -393,10 +444,24 @@ def build_bmesh(tri, group, settings, faces=None):
             inner = [v for v in bm.verts if not v.is_boundary and all(len(e.link_faces) == 2 for e in v.link_edges)]
             for _ in range(settings.smooth_quads):
                 bmesh.ops.smooth_vert(bm, verts=inner, factor=0.5, use_axis_x=True, use_axis_y=True, use_axis_z=False)
+    _drop_slivers(bm, eps * 2.0)
     _remove_loose(bm)
-    if not bm.faces:
-        return bm
 
+
+def _drop_slivers(bm, dist):
+    """Remove zero-height faces (a vertex lying on the opposite edge) and
+    stitch the edge to that vertex instead, so the edge has two faces."""
+    slivers = []
+    for f in bm.faces:
+        longest = max(e.calc_length() for e in f.edges)
+        if longest > 0 and 2.0 * f.calc_area() / longest < dist:
+            slivers.append(f)
+    if slivers:
+        bmesh.ops.delete(bm, geom=slivers, context="FACES_ONLY")
+        _fix_t_junctions(bm, dist)
+
+
+def _finish(bm, settings):
     for f in bm.faces:
         if f.normal.z < 0:
             f.normal_flip()
@@ -406,6 +471,93 @@ def build_bmesh(tri, group, settings, faces=None):
             bmesh.ops.translate(bm, verts=bm.verts[:], vec=(0.0, 0.0, -settings.depth * 0.5))
     bm.normal_update()
     return bm
+
+
+def _group_flat(tri, group, faces, eps, settings):
+    """Flat faces of one group. If the result does not cover exactly the area
+    of the group's triangles (broken outline next to degenerate triangles),
+    the group's triangles are used directly instead."""
+    faces = _group_faces(tri, group, faces)
+    bm = bmesh.new()
+    loops = region_loops(tri, group, eps, faces)
+    if loops:
+        _flat_faces(bm, loops, eps, settings)
+    exact = 0.0
+    for fi in faces:
+        a, b, c = (tri.verts[i] for i in tri.faces[fi])
+        exact += abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) * 0.5
+    area = sum(f.calc_area() for f in bm.faces)
+    if abs(area - exact) > 1e-4 * exact + eps * eps:
+        bm.free()
+        bm = bmesh.new()
+        _faces_from_tri(bm, tri, group)
+        _drop_slivers(bm, eps * 2.0)
+        _remove_loose(bm)
+    return bm
+
+
+def build_bmesh(tri, group, settings, faces=None):
+    """Create a bmesh for one group of a TriangulationResult.
+
+    *faces* optionally lists the face indices of the group (see faces_by_group).
+    """
+    eps = max(settings.merge_distance, 1e-9)
+    bm = _group_flat(tri, group, faces, eps, settings)
+    if not bm.faces:
+        return bm
+    return _finish(bm, settings)
+
+
+def _fix_t_junctions(bm, dist):
+    """Weld border vertices onto straight border edges they lie on (left
+    over after removing sliver faces), so every edge has two faces again."""
+    for _ in range(4):
+        bverts = [v for v in bm.verts if v.is_boundary]
+        if not bverts:
+            return
+        kd = KDTree(len(bverts))
+        for i, v in enumerate(bverts):
+            kd.insert(v.co, i)
+        kd.balance()
+        splits = []
+        for e in bm.edges:
+            if not e.is_boundary:
+                continue
+            a, b = e.verts
+            d = b.co - a.co
+            length = d.length
+            if length <= 2 * dist:
+                continue
+            on_edge = []
+            for co, i, _d in kd.find_range((a.co + b.co) * 0.5, length * 0.5 + dist):
+                v = bverts[i]
+                if v is a or v is b:
+                    continue
+                t = (co - a.co).dot(d) / (length * length)
+                if dist < t * length < length - dist and (a.co + d * t - co).length <= dist:
+                    on_edge.append((t, v))
+            if on_edge:
+                splits.append((e, a, b, sorted(on_edge, key=lambda x: x[0])))
+        if not splits:
+            return
+        targetmap = {}
+        for e, a, b, on_edge in splits:
+            if not e.is_valid:
+                continue
+            cur, start, done = e, a, 0.0
+            for t, v in on_edge:
+                if v in targetmap or v.is_valid is False:
+                    continue
+                fac = (t - done) / (1.0 - done)
+                _new_edge, nv = bmesh.utils.edge_split(cur, start, fac)
+                targetmap[nv] = v
+                cur = next((ed for ed in nv.link_edges if b in ed.verts), None)
+                start, done = nv, t
+                if cur is None:
+                    break
+        if not targetmap:
+            return
+        bmesh.ops.weld_verts(bm, targetmap=targetmap)
 
 
 def _remove_loose(bm):
@@ -429,15 +581,15 @@ def solidify(bm, depth):
     for e in bm.edges:
         if len(e.link_faces) == 1:
             loop = e.link_loops[0]
-            boundary.append((loop.vert, loop.link_loop_next.vert))
+            boundary.append((loop.vert, loop.link_loop_next.vert, loop.face.material_index))
     top = {v: bm.verts.new((v.co.x, v.co.y, depth)) for v in bm.verts[:]}
     for f in bottom_faces:
         nf = bm.faces.new([top[v] for v in f.verts])
         nf.material_index = f.material_index
         nf.smooth = f.smooth
-    for a, b in boundary:
+    for a, b, mat in boundary:
         try:
-            bm.faces.new((a, b, top[b], top[a]))
+            bm.faces.new((a, b, top[b], top[a])).material_index = mat
         except ValueError:
             pass
     bmesh.ops.reverse_faces(bm, faces=bottom_faces)

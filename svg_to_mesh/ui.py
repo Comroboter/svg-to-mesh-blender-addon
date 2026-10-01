@@ -4,7 +4,13 @@ import textwrap
 import bpy
 
 from . import depth_ops, prefs, update_ops
-from .depth_ops import SVGMESH_OT_ai_cancel, SVGMESH_OT_ai_depth, SVGMESH_OT_reapply_depth, SVGMESH_OT_terrace
+from .depth_ops import (
+    SVGMESH_OT_ai_cancel,
+    SVGMESH_OT_ai_depth,
+    SVGMESH_OT_reapply_depth,
+    SVGMESH_OT_split_parts,
+    SVGMESH_OT_terrace,
+)
 from .operators import (
     SVGMESH_OT_boolean,
     SVGMESH_OT_curves_to_mesh,
@@ -72,18 +78,20 @@ class SVGMESH_PT_depth(bpy.types.Panel):
         row = layout.row(align=True)
         row.operator(SVGMESH_OT_terrace.bl_idname, icon="SORTSIZE")
         row.operator(SVGMESH_OT_reapply_depth.bl_idname, text="", icon="FILE_REFRESH")
+        layout.operator(SVGMESH_OT_split_parts.bl_idname, icon="MOD_EXPLODE")
 
         box = layout.box()
         box.label(text="AI suggestions (optional)")
-        if not prefs.get_api_key(context):
+        if not prefs.ai_ready(context):
             col = box.column(align=True)
-            col.label(text="Let Claude pick a height per color")
+            col.label(text="Let an AI pick a height per color")
             col.label(text="based on what the logo shows.")
             box.operator("preferences.addon_show", text="Set up AI...", icon="PREFERENCES").module = __package__
         elif depth_ops.ai_job_status() is not None:
             draw_ai_progress(box, *depth_ops.ai_job_status())
         else:
             box.prop(scene, "svgmesh_ai_hint", text="Hint")
+            box.prop(scene, "svgmesh_ai_split")
             box.operator(SVGMESH_OT_ai_depth.bl_idname, icon="SHADERFX")
         obj = context.active_object
         reason = obj.get("svgmesh_reason") if obj is not None else None

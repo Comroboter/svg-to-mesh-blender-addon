@@ -4,7 +4,10 @@ Works on any selected mesh objects that are flat or extruded prisms along Z
 (which is what the importers produce).
 """
 
+import colorsys
+
 import bmesh
+import bpy
 import numpy as np
 
 from . import mesh_builder
@@ -56,10 +59,22 @@ def top_triangles(obj):
     return np.array(tris).reshape(-1, 3, 2)
 
 
-def collect_regions(objs, max_size=512):
-    """Describe the objects for the AI and render a preview PNG.
+def map_colors(n):
+    """*n* clearly different flat colors for the region map (no gray)."""
+    out = []
+    for i in range(n):
+        hue = (i * 0.618033988749895) % 1.0
+        light = (0.45, 0.62, 0.32)[(i // 7) % 3]
+        out.append(colorsys.hls_to_rgb(hue, light, 0.85))
+    return out
 
-    Returns (regions, png_bytes, ordered objects); region ids are 1-based.
+
+def collect_regions(objs, max_size=512):
+    """Describe the objects for the AI and render the preview images.
+
+    Returns (regions, [preview png, region map png], ordered objects);
+    region ids are 1-based. The region map paints every region in its own
+    color, so parts that share a color can be told apart.
     """
     ordered = paint_order(objs)
     layers = []
@@ -69,6 +84,8 @@ def collect_regions(objs, max_size=512):
     pts = np.concatenate([t.reshape(-1, 2) for _c, t in layers if len(t)] or [np.zeros((1, 2))])
     bounds = (pts[:, 0].min(), pts[:, 1].min(), pts[:, 0].max(), pts[:, 1].max())
     img, to_px = rasterize(layers, bounds, max_size=max_size)
+    ids = map_colors(len(layers))
+    id_img, _to_px = rasterize([(c, tris) for c, (_rgb, tris) in zip(ids, layers)], bounds, max_size=max_size)
     total = 0.0
     areas = []
     for _rgb, tris in layers:
@@ -83,6 +100,7 @@ def collect_regions(objs, max_size=512):
     for i, (o, (rgb, tris), area) in enumerate(zip(ordered, layers, areas)):
         _rgb, hexcol = object_color(o)
         entry = {"id": i + 1, "name": o.name, "color": hexcol, "layer": i,
+                 "map_color": "#%02x%02x%02x" % tuple(int(round(c * 255)) for c in ids[i]),
                  "area_percent": round(100.0 * area / total, 2) if total else 0.0}
         if len(tris):
             xy = tris.reshape(-1, 2)
@@ -90,7 +108,82 @@ def collect_regions(objs, max_size=512):
             x1, y1 = to_px(xy[:, 0].max(), xy[:, 1].min())
             entry["bbox_px"] = [int(x0), int(y0), int(x1), int(y1)]
         regions.append(entry)
-    return regions, encode_png(img), ordered
+    return regions, [encode_png(img), encode_png(id_img)], ordered
+
+
+# --------------------------------------------------------------------------
+# splitting objects into their separate parts
+# --------------------------------------------------------------------------
+
+
+def _islands(bm):
+    """Lists of face indices of the edge-connected parts of a bmesh."""
+    bm.faces.ensure_lookup_table()
+    seen = set()
+    islands = []
+    for f in bm.faces:
+        if f.index in seen:
+            continue
+        seen.add(f.index)
+        stack, island = [f], []
+        while stack:
+            cur = stack.pop()
+            island.append(cur.index)
+            for e in cur.edges:
+                for g in e.link_faces:
+                    if g.index not in seen:
+                        seen.add(g.index)
+                        stack.append(g)
+        islands.append(island)
+    return islands
+
+
+def split_parts(obj, min_share=0.002):
+    """Split *obj* into one object per separate part (largest first).
+
+    Parts smaller than *min_share* of the object's area stay together in
+    one "details" object. Returns the new objects (or [obj] if there is
+    nothing to split); the original object is removed.
+    """
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    try:
+        islands = _islands(bm)
+        if len(islands) < 2:
+            return [obj]
+        zs = [v.co.z for v in bm.verts]
+        flat = max(zs) - min(zs) < 1e-9
+        areas = [sum(bm.faces[i].calc_area() for i in isl if flat or bm.faces[i].normal.z > 0.5) for isl in islands]
+        total = sum(areas) or 1.0
+        order = sorted(range(len(islands)), key=lambda k: -areas[k])
+        groups = [(islands[k], "part %d" % (n + 1)) for n, k in enumerate(order) if areas[k] >= min_share * total]
+        small = [i for k in order if areas[k] < min_share * total for i in islands[k]]
+        if small:
+            groups.append((small, "details"))
+        if len(groups) < 2:
+            return [obj]
+        parts = []
+        for faces, label in groups:
+            keep = set(faces)
+            part = bm.copy()
+            part.faces.index_update()
+            bmesh.ops.delete(part, geom=[f for f in part.faces if f.index not in keep], context="FACES")
+            me = obj.data.copy()
+            part.to_mesh(me)
+            part.free()
+            new = obj.copy()
+            new.data = me
+            new.name = "%s %s" % (obj.name, label)
+            for coll in obj.users_collection:
+                coll.objects.link(new)
+            parts.append(new)
+    finally:
+        bm.free()
+    old_mesh = obj.data
+    bpy.data.objects.remove(obj)
+    if old_mesh.users == 0:
+        bpy.data.meshes.remove(old_mesh)
+    return parts
 
 
 def set_depth(obj, bottom, top):

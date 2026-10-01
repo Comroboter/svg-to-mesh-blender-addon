@@ -57,7 +57,7 @@ def build(topology, separate="ONE", depth=0.1, overlap="VISIBLE"):
     doc = parse_svg(TEST_SVG)
     st = pipeline.ImportSettings(
         mesh=mesh_builder.MeshSettings(topology=topology, overlap=overlap),
-        separate=separate, ignore_white=True, depth=depth, scale_mode="REAL", unit_scale=0.01,
+        separate=separate, white="HOLE", depth=depth, scale_mode="REAL", unit_scale=0.01,
     )
     return pipeline.build_objects(bpy.context, doc.shapes, st, "T")
 
@@ -170,7 +170,7 @@ def test_trace_operator(tmp_path):
 def import_mountain(depth=0.03):
     path = os.path.join(os.path.dirname(__file__), "..", "examples", "mountain_logo.svg")
     res = bpy.ops.import_mesh.svg_clean(filepath=os.path.abspath(path), separate="COLOR", depth=depth,
-                                        ignore_white=False)
+                                        white="KEEP")
     assert res == {"FINISHED"}
     return list(bpy.context.selected_objects)
 
@@ -195,9 +195,9 @@ def test_ai_depth_with_mocked_api(monkeypatch):
     objs = import_mountain(depth=0.0)  # flat objects get solidified
     sent = {}
 
-    def fake_call(key, headers, body, **kw):
-        sent["key"], sent["body"] = key, body
-        text = body["messages"][0]["content"][1]["text"]
+    def fake_call(request, key="", **kw):
+        sent["key"], sent["body"] = key, request.body
+        text = request.body["messages"][0]["content"][-1]["text"]
         regions = json.loads(text[text.index("["):text.rindex("]") + 1])
         sent["regions"] = regions
         out = [{"id": r["id"], "height": 1.0 + r["layer"] * 0.5, "base": 0.0, "reason": "layer %d" % r["layer"]}
@@ -214,7 +214,10 @@ def test_ai_depth_with_mocked_api(monkeypatch):
     assert sent["key"] == "test-key"
     assert len(sent["regions"]) == len(objs)
     assert {r["color"] for r in sent["regions"]} == {o["svgmesh_color"] for o in objs}
-    assert "wall sign" in sent["body"]["messages"][0]["content"][1]["text"]
+    content = sent["body"]["messages"][0]["content"]
+    assert "wall sign" in content[-1]["text"]
+    assert [c["type"] for c in content] == ["image", "image", "text"]  # preview + region map
+    assert len({r["map_color"] for r in sent["regions"]}) == len(objs)
     for o in objs:
         vol = check_solid(o)[0]
         assert vol > 0
@@ -232,7 +235,7 @@ def test_ai_depth_needs_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     for o in objs:
         o.select_set(True)
-    with pytest.raises(RuntimeError, match="No API key"):
+    with pytest.raises(RuntimeError, match="not set up"):
         bpy.ops.object.svgmesh_ai_depth()
 
 
@@ -249,8 +252,8 @@ def test_ai_depth_respects_offline_mode():
 def _fake_ai(monkeypatch, step=0.5):
     from svg_to_mesh.core import ai_client
 
-    def fake_call(key, headers, body, **kw):
-        text = body["messages"][0]["content"][1]["text"]
+    def fake_call(request, key="", **kw):
+        text = request.body["messages"][0]["content"][-1]["text"]
         regions = json.loads(text[text.index("["):text.rindex("]") + 1])
         out = [{"id": r["id"], "height": 1.0 + r["layer"] * step, "base": 0.0, "reason": "r"} for r in regions]
         return {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(
@@ -325,3 +328,44 @@ def test_update_operators_are_registered():
     assert update_ops.current_version() == tuple(int(x) for x in build.get_version().split("."))
     assert hasattr(bpy.ops.preferences, "svgmesh_check_update")
     assert not bpy.ops.preferences.svgmesh_install_update.poll()  # nothing checked yet
+
+
+def test_split_parts_gives_each_part_its_own_object():
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 40">
+      <rect x="0" y="0" width="30" height="30"/><rect x="40" y="0" width="30" height="30"/>
+      <rect x="80" y="0" width="0.5" height="0.5"/><rect x="90" y="0" width="0.5" height="0.5"/></svg>"""
+    doc = parse_svg(svg)
+    st = pipeline.ImportSettings(separate="AUTO", depth=0.1, scale_mode="KEEP", origin="KEEP")
+    objs = pipeline.build_objects(bpy.context, doc.shapes, st, "P")
+    assert len(objs) == 1  # one color: AUTO makes a single object
+    obj = objs[0]
+    obj["svgmesh_height"] = 2.0
+    pipeline.select_objects(bpy.context, [obj])
+    assert bpy.ops.object.svgmesh_split_parts() == {"FINISHED"}
+    parts = sorted(bpy.context.selected_objects, key=lambda o: o.name)
+    assert [o.name for o in parts] == ["P details", "P part 1", "P part 2"]
+    vols = {o.name: check_solid(o)[0] for o in parts}
+    assert vols["P part 1"] == pytest.approx(900 * 0.1, rel=1e-4)
+    assert vols["P details"] == pytest.approx(2 * 0.25 * 0.1, rel=1e-4)  # tiny parts stay together
+    assert all(o["svgmesh_height"] == 2.0 for o in parts)  # properties are kept
+    assert "P" not in bpy.data.objects
+
+
+def test_auto_objects_split_colorful_artwork():
+    st = pipeline.ImportSettings(separate="AUTO", white="AUTO", depth=0.1, scale_mode="REAL", unit_scale=0.01)
+    objs = pipeline.build_objects(bpy.context, parse_svg(TEST_SVG).shapes, st, "A")
+    # white background removed (touches the outside), the enclosed white square is kept as its own color
+    assert sorted(o.name for o in objs) == ["A #0000ff", "A #ff0000", "A #ffffff"]
+    vols = {o.name: check_solid(o)[0] for o in objs}
+    assert vols["A #ffffff"] == pytest.approx((0.16 - 0.04) * 0.1, rel=1e-4)
+
+
+def test_white_hole_background_through_letter_holes():
+    svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect width="100" height="100" fill="#fff"/>
+      <path d="M20 20h60v60h-60z M40 40v20h20v-20z" fill="#000" fill-rule="evenodd"/></svg>"""
+    st = pipeline.ImportSettings(white="AUTO", depth=0.1, scale_mode="REAL", unit_scale=0.01)
+    objs = pipeline.build_objects(bpy.context, parse_svg(svg).shapes, st, "O")
+    assert len(objs) == 1
+    # the background shows through the hole of the "O": it stays a hole
+    assert check_solid(objs[0])[0] == pytest.approx((0.36 - 0.04) * 0.1, rel=1e-4)

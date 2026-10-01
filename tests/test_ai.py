@@ -46,7 +46,9 @@ def test_rasterize_and_png_roundtrip():
 
 
 def test_build_request_shape():
-    headers, body = ai_client.build_request([{"id": 1, "color": "#ff0000", "area_percent": 100.0}], b"png", "keychain")
+    req = ai_client.build_request([{"id": 1, "color": "#ff0000", "area_percent": 100.0}], b"png", "keychain")
+    headers, body = req.headers, req.body
+    assert req.url == "https://api.anthropic.com/v1/messages"
     assert headers["anthropic-version"] == "2023-06-01"
     assert "x-api-key" not in headers
     assert body["model"] == ai_client.DEFAULT_MODEL == "claude-opus-5-5"
@@ -61,7 +63,8 @@ def test_build_request_shape():
 
 
 def test_build_request_haiku_has_no_effort_or_fallbacks():
-    headers, body = ai_client.build_request([], b"", model="claude-haiku-4-5")
+    req = ai_client.build_request([], b"", model="claude-haiku-4-5")
+    headers, body = req.headers, req.body
     assert "effort" not in body["output_config"]
     assert "fallbacks" not in body and "anthropic-beta" not in headers
 
@@ -114,7 +117,8 @@ def test_call_api_retries_then_succeeds(monkeypatch):
 
     monkeypatch.setattr(ai_client.urllib.request, "urlopen", fake_urlopen)
     slept = []
-    out = ai_client.call_api("key", {"content-type": "application/json"}, {"a": 1}, sleep=slept.append)
+    req = ai_client.Request("ANTHROPIC", ai_client.API_URL, {"a": 1}, {"content-type": "application/json"})
+    out = ai_client.call_api(req, "key", sleep=slept.append)
     assert out == {"ok": True}
     assert len(calls) == 2 and slept == [1.0]
     assert calls[0].get_header("X-api-key") == "key"
@@ -127,4 +131,118 @@ def test_call_api_maps_errors(monkeypatch):
 
     monkeypatch.setattr(ai_client.urllib.request, "urlopen", fake_urlopen)
     with pytest.raises(ai_client.AIError, match="API key is invalid"):
-        ai_client.call_api("bad", {}, {}, sleep=lambda s: None)
+        ai_client.call_api(ai_client.Request("ANTHROPIC", ai_client.API_URL, {}), "bad", sleep=lambda s: None)
+
+
+# --------------------------------------------------------------------------
+# OpenAI-compatible and Ollama servers (a real local HTTP server that checks
+# the request format and answers like the real APIs)
+# --------------------------------------------------------------------------
+
+ANSWER = {"regions": [{"id": 1, "height": 2.0, "base": 0.0, "reason": "main"},
+                      {"id": 2, "height": 1.0, "base": 1.0, "reason": "detail"}], "summary": "ok"}
+
+
+@pytest.fixture()
+def fake_server():
+    import http.server
+    import threading
+
+    seen = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["content-length"])))
+            seen.append((self.path, dict(self.headers), body))
+            if self.path == "/v1/chat/completions":
+                user = body["messages"][1]["content"]
+                assert body["messages"][0]["role"] == "system"
+                assert user[0]["type"] == "text" and user[1]["image_url"]["url"].startswith("data:image/png;base64,")
+                assert body["response_format"]["json_schema"]["strict"] is True
+                out = {"choices": [{"finish_reason": "stop", "message": {
+                    "role": "assistant", "content": json.dumps(ANSWER), "refusal": None}}]}
+            elif self.path == "/api/chat":
+                if body["model"] == "missing":
+                    self.send_response(404)
+                    self.end_headers()
+                    self.wfile.write(b'{"error": "model \'missing\' not found"}')
+                    return
+                assert body["stream"] is False and body["format"]["type"] == "object"
+                assert len(body["messages"][1]["images"]) == 2
+                out = {"model": body["model"], "message": {"role": "assistant", "content": json.dumps(ANSWER)},
+                       "done": True, "done_reason": "stop"}
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+            data = json.dumps(out).encode()
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield "http://127.0.0.1:%d" % server.server_port, seen
+    server.shutdown()
+
+
+REGIONS = [{"id": 1, "color": "#000000", "area_percent": 80.0}, {"id": 2, "color": "#000000", "area_percent": 20.0}]
+
+
+def test_openai_compatible_server(fake_server):
+    url, seen = fake_server
+    req = ai_client.build_request(REGIONS, [b"a", b"b"], "sign", "my-vision-model", provider="OPENAI",
+                                  base_url=url + "/v1/")
+    data = ai_client.call_api(req, "sk-test", sleep=lambda s: None)
+    out, summary = ai_client.parse_response(data, {1, 2}, "OPENAI")
+    assert out[1][:2] == (2.0, 0.0) and out[2][:2] == (1.0, 1.0) and summary == "ok"
+    path, headers, body = seen[0]
+    assert headers["Authorization"] == "Bearer sk-test"
+    assert body["model"] == "my-vision-model" and body["max_tokens"] == 16000  # compatible server
+    official = ai_client.build_request(REGIONS, [b"a"], provider="OPENAI")
+    assert official.url == "https://api.openai.com/v1/chat/completions"
+    assert "max_completion_tokens" in official.body and official.body["model"] == "gpt-5-mini"
+
+
+def test_openai_refusal_and_cutoff():
+    with pytest.raises(ai_client.AIError, match="declined"):
+        ai_client.parse_response({"choices": [{"message": {"refusal": "no"}}]}, {1}, "OPENAI")
+    with pytest.raises(ai_client.AIError, match="cut off"):
+        ai_client.parse_response({"choices": [{"finish_reason": "length", "message": {"content": "{"}}]}, {1}, "OPENAI")
+
+
+def test_ollama_server(fake_server):
+    url, seen = fake_server
+    req = ai_client.build_request(REGIONS, [b"a", b"b"], provider="OLLAMA", base_url=url)
+    assert req.body["model"] == "gemma3"
+    data = ai_client.call_api(req, sleep=lambda s: None)
+    out, _summary = ai_client.parse_response(data, {1, 2}, "OLLAMA")
+    assert set(out) == {1, 2}
+    assert "Authorization" not in seen[0][1]
+    missing = ai_client.build_request(REGIONS, [b"a", b"b"], model="missing", provider="OLLAMA", base_url=url)
+    with pytest.raises(ai_client.AIError, match="ollama pull missing"):
+        ai_client.call_api(missing, sleep=lambda s: None)
+
+
+def test_ollama_not_running():
+    req = ai_client.build_request(REGIONS, [b"a"], provider="OLLAMA", base_url="http://127.0.0.1:9")
+    with pytest.raises(ai_client.AIError, match="is it running"):
+        ai_client.call_api(req, retries=0, timeout=5)
+
+
+def test_code_fenced_json_is_accepted():
+    data = {"message": {"content": "```json\n" + json.dumps(ANSWER) + "\n```"}, "done": True}
+    out, _summary = ai_client.parse_response(data, {1, 2}, "OLLAMA")
+    assert set(out) == {1, 2}
+
+
+def test_bad_server_address():
+    req = ai_client.build_request(REGIONS, [b"a"], provider="OPENAI", base_url="file:///etc")
+    with pytest.raises(ai_client.AIError, match="http"):
+        ai_client.call_api(req, "k")

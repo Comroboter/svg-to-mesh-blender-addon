@@ -5,7 +5,7 @@ import threading
 import time
 
 import bpy
-from bpy.props import FloatProperty, StringProperty
+from bpy.props import BoolProperty, FloatProperty, StringProperty
 from bpy.types import Operator
 
 from . import depth_tools, prefs
@@ -53,8 +53,8 @@ def ai_job_status(now=None):
 
 def ai_job_text(elapsed):
     if elapsed < 2.0:
-        return "Sending preview to Claude..."
-    return "Claude is thinking... %d s" % elapsed
+        return "Sending the preview..."
+    return "AI is thinking... %d s" % elapsed
 
 
 def _redraw_sidebars(context):
@@ -62,6 +62,23 @@ def _redraw_sidebars(context):
     for area in screen.areas if screen is not None else ():
         if area.type == "VIEW_3D":
             area.tag_redraw()
+
+
+MAX_AI_REGIONS = 150
+SPLIT_DESC = ("Split every selected object into its separate parts first (e.g. the mustache apart from the "
+              "eyes), so each part can get its own height. Parts that touch stay together")
+
+
+def _split(context, objs):
+    """Split objects into their parts and select the parts instead."""
+    out = []
+    for o in objs:
+        out.extend(depth_tools.split_parts(o))
+    for o in out:
+        o.select_set(True)
+    if out:
+        context.view_layer.objects.active = out[0]
+    return out
 
 
 def _selected_meshes(context):
@@ -120,7 +137,7 @@ class SVGMESH_OT_reapply_depth(Operator):
 
 
 class SVGMESH_OT_ai_depth(Operator):
-    """Ask Claude to suggest a height for every selected object (sends a small preview image)"""
+    """Ask the AI to suggest a height for every selected object (sends two small preview images)"""
 
     bl_idname = "object.svgmesh_ai_depth"
     bl_label = "Suggest with AI"
@@ -129,6 +146,7 @@ class SVGMESH_OT_ai_depth(Operator):
     base_depth: FloatProperty(name="Base Depth", subtype="DISTANCE", unit="LENGTH", default=0.0, min=0.0,
                               description=BASE_DEPTH_DESC)
     hint: StringProperty(name="Hint", default="")
+    split_parts: BoolProperty(name="Split Parts First", default=False, description=SPLIT_DESC)
 
     _timer = None
     _thread = None
@@ -143,21 +161,27 @@ class SVGMESH_OT_ai_depth(Operator):
         if not online_allowed():
             self.report({"ERROR"}, "Online access is disabled. Enable it in Preferences > System > Network")
             return None
-        key = prefs.get_api_key(context)
-        if not key:
-            self.report({"ERROR"}, "No API key - add one in the add-on preferences")
+        if not prefs.ai_ready(context):
+            self.report({"ERROR"}, "The AI is not set up yet - see the add-on preferences")
             return None
         objs = _selected_meshes(context)
+        if self.split_parts:
+            objs = _split(context, objs)
         if len(objs) < 2:
-            self.report({"WARNING"}, "Select at least two objects (import with Objects: Per Color or Per Shape)")
+            self.report({"WARNING"}, "Select at least two objects (import with Objects: Auto or Per Color)")
             return None
-        regions, png, ordered = depth_tools.collect_regions(objs)
-        headers, body = ai_client.build_request(regions, png, self.hint, prefs.get_model(context))
-        return key, headers, body, ordered
+        if len(objs) > MAX_AI_REGIONS:
+            self.report({"ERROR"}, "Too many objects for one request (%d, at most %d)" % (len(objs), MAX_AI_REGIONS))
+            return None
+        regions, images, ordered = depth_tools.collect_regions(objs)
+        provider = prefs.get_provider(context)
+        request = ai_client.build_request(regions, images, self.hint, prefs.get_model(context),
+                                          provider=provider, base_url=prefs.get_server(context))
+        return prefs.get_api_key(context), request, ordered
 
-    def _finish(self, context, data, ordered):
+    def _finish(self, context, data, ordered, provider):
         try:
-            suggestions, summary = ai_client.parse_response(data, set(range(1, len(ordered) + 1)))
+            suggestions, summary = ai_client.parse_response(data, set(range(1, len(ordered) + 1)), provider)
         except ai_client.AIError as ex:
             self.report({"ERROR"}, str(ex))
             return {"CANCELLED"}
@@ -175,27 +199,29 @@ class SVGMESH_OT_ai_depth(Operator):
         prepared = self._prepare(context)
         if prepared is None:
             return {"CANCELLED"}
-        key, headers, body, ordered = prepared
+        key, request, ordered = prepared
         try:
-            data = ai_client.call_api(key, headers, body)
+            data = ai_client.call_api(request, key)
         except ai_client.AIError as ex:
             self.report({"ERROR"}, str(ex))
             return {"CANCELLED"}
-        return self._finish(context, data, ordered)
+        return self._finish(context, data, ordered, request.provider)
 
     # -- interactive run: the request runs in a thread, Blender stays responsive
     def invoke(self, context, event):
         self.base_depth = context.scene.svgmesh_depth_unit
         self.hint = context.scene.svgmesh_ai_hint
+        self.split_parts = context.scene.svgmesh_ai_split
         prepared = self._prepare(context)
         if prepared is None:
             return {"CANCELLED"}
-        key, headers, body, self._ordered = prepared
+        key, request, self._ordered = prepared
+        self._provider = request.provider
         self._result = {}
 
         def work(result=self._result):
             try:
-                result["data"] = ai_client.call_api(key, headers, body)
+                result["data"] = ai_client.call_api(request, key)
             except ai_client.AIError as ex:
                 result["error"] = str(ex)
             except Exception as ex:  # noqa: BLE001 - surface anything unexpected to the user
@@ -248,7 +274,26 @@ class SVGMESH_OT_ai_depth(Operator):
         if not alive:
             self.report({"WARNING"}, "Objects changed while waiting - nothing applied")
             return {"CANCELLED"}
-        return self._finish(context, self._result["data"], self._ordered)
+        return self._finish(context, self._result["data"], self._ordered, self._provider)
+
+
+class SVGMESH_OT_split_parts(Operator):
+    """Split the selected objects into their separate parts so every part can get its own height.
+Parts that touch each other stay together: separate those in Edit Mode (select with L, then P > Selection)"""
+
+    bl_idname = "object.svgmesh_split_parts"
+    bl_label = "Split into Parts"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return bool(_selected_meshes(context)) and context.mode == "OBJECT"
+
+    def execute(self, context):
+        objs = _selected_meshes(context)
+        parts = _split(context, objs)
+        self.report({"INFO"}, "%d object(s) split into %d part(s)" % (len(objs), len(parts)))
+        return {"FINISHED"}
 
 
 class SVGMESH_OT_ai_cancel(Operator):
@@ -263,7 +308,8 @@ class SVGMESH_OT_ai_cancel(Operator):
         return {"FINISHED"}
 
 
-classes = (SVGMESH_OT_terrace, SVGMESH_OT_reapply_depth, SVGMESH_OT_ai_depth, SVGMESH_OT_ai_cancel)
+classes = (SVGMESH_OT_terrace, SVGMESH_OT_reapply_depth, SVGMESH_OT_split_parts, SVGMESH_OT_ai_depth,
+           SVGMESH_OT_ai_cancel)
 
 
 def register_props():
@@ -276,8 +322,10 @@ def register_props():
         name="Hint", default="",
         description="Optional: what you want to make, e.g. 'keychain', 'wall sign', 'stamp'",
     )
+    bpy.types.Scene.svgmesh_ai_split = BoolProperty(name="Split Parts First", default=False, description=SPLIT_DESC)
 
 
 def unregister_props():
+    del bpy.types.Scene.svgmesh_ai_split
     del bpy.types.Scene.svgmesh_ai_hint
     del bpy.types.Scene.svgmesh_depth_unit

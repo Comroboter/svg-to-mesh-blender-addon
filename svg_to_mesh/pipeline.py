@@ -18,8 +18,8 @@ class ImportSettings:
     target_size: float = 1.0  # FIT: largest dimension in output units
     unit_scale: float = 1.0  # REAL: output units per source unit
     origin: str = "CENTER"  # CENTER | BOTTOM_LEFT | KEEP
-    separate: str = "ONE"  # ONE | COLOR | SHAPE
-    ignore_white: bool = False
+    separate: str = "ONE"  # ONE | COLOR | SHAPE | AUTO (ONE for single-color artwork, else COLOR)
+    white: str = "KEEP"  # AUTO (background white is removed) | HOLE (all white is a hole) | KEEP
     include_strokes: bool = True
     layer_offset: float = 0.0
     create_materials: bool = True
@@ -103,6 +103,15 @@ def keep_shape(shape, settings):
     return fill, stroke
 
 
+def resolve_separate(settings, polys):
+    """AUTO: one object for single-color artwork, one per color otherwise."""
+    if settings.separate != "AUTO":
+        return settings.separate
+    colors = {color_hex(p.color) for p in polys
+              if p.color is not None and not (settings.white != "KEEP" and is_white(p.color))}
+    return "COLOR" if len(colors) > 1 else "ONE"
+
+
 def prepare_polys(shapes, settings):
     """Flatten shapes and map them into output space.
 
@@ -167,10 +176,11 @@ def build_objects(context, shapes, settings, name, collection=None, matrix=None)
     group_keys = []
     group_of = []
     group_info = []
+    separate = resolve_separate(settings, polys)
     for p in polys:
-        if settings.separate == "COLOR":
+        if separate == "COLOR":
             key = color_hex(p.color) if p.color is not None else "none"
-        elif settings.separate == "SHAPE":
+        elif separate == "SHAPE":
             key = p.source_index
         else:
             key = "all"
@@ -178,7 +188,8 @@ def build_objects(context, shapes, settings, name, collection=None, matrix=None)
             group_keys.append(key)
             group_info.append(p)
         group_of.append(group_keys.index(key))
-    knockout = [settings.ignore_white and is_white(p.color) for p in polys]
+    white = {"HOLE": True, "AUTO": mesh_builder.AUTO}.get(settings.white, False)
+    knockout = [white if is_white(p.color) else False for p in polys]
 
     ms = mesh_builder.MeshSettings(**vars(settings.mesh))
     ms.grid_size = max(settings.grid_size, 1e-4) * size
@@ -188,46 +199,48 @@ def build_objects(context, shapes, settings, name, collection=None, matrix=None)
 
     if collection is None:
         collection = context.collection or context.scene.collection
-    objects = []
     group_faces = mesh_builder.faces_by_group(tri)
+
+    def make_object(bm, obj_name, colors, layer):
+        mesh_builder.add_planar_uvs(bm, bounds)
+        me = bpy.data.meshes.new(obj_name)
+        bm.to_mesh(me)
+        bm.free()
+        if settings.create_materials:
+            for col in colors:
+                me.materials.append(get_material(col if col is not None else (0.8, 0.8, 0.8)))
+        obj = bpy.data.objects.new(obj_name, me)
+        # remembered for the "Depth per Object" tools (paint order, color)
+        obj["svgmesh_layer"] = layer
+        main = next((c for c in colors if c is not None and not is_white(c)), colors[0] if colors else None)
+        if main is not None:
+            obj["svgmesh_color"] = color_hex(main)
+        if matrix is not None:
+            obj.matrix_world = matrix
+        collection.objects.link(obj)
+        return obj
+
+    objects = []
     for gid, first in enumerate(group_info):
         bm = mesh_builder.build_bmesh(tri, gid, ms, group_faces.get(gid, []))
         if not bm.faces:
             bm.free()
             continue
-        mesh_builder.add_planar_uvs(bm, bounds)
         if settings.layer_offset:
             z = settings.layer_offset * len(objects)
             for v in bm.verts:
                 v.co.z += z
         if len(group_info) == 1:
             obj_name = name
-        elif settings.separate == "COLOR":
+        elif separate == "COLOR":
             obj_name = "%s %s" % (name, group_keys[gid])
         else:
             obj_name = "%s %s" % (name, first.name)
-        me = bpy.data.meshes.new(obj_name)
-        bm.to_mesh(me)
-        bm.free()
-        if settings.create_materials and first.color is not None:
-            if settings.separate == "ONE":
-                colors = {}
-                for p in polys:
-                    if p.color is not None and not is_white(p.color):
-                        colors.setdefault(color_hex(p.color), p.color)
-                col = next(iter(colors.values()), first.color)
-            else:
-                col = first.color
-            me.materials.append(get_material(col))
-        obj = bpy.data.objects.new(obj_name, me)
-        # remembered for the "Depth per Object" tools (paint order, color)
-        obj["svgmesh_layer"] = gid
-        if first.color is not None:
-            obj["svgmesh_color"] = color_hex(first.color)
-        if matrix is not None:
-            obj.matrix_world = matrix
-        collection.objects.link(obj)
-        objects.append(obj)
+        if separate == "ONE":  # one material: the main color
+            colors = [p.color for p in polys if p.color is not None and not is_white(p.color)][:1] or [first.color]
+        else:
+            colors = [first.color]
+        objects.append(make_object(bm, obj_name, colors if first.color is not None else [], gid))
     return objects
 
 

@@ -26,6 +26,7 @@ TOPOLOGY_ITEMS = [
 
 
 SEPARATE_ITEMS = [
+    ("AUTO", "Auto", "Single object for one-color artwork, one object per color for colorful artwork"),
     ("ONE", "Single Object", "Merge everything into one mesh"),
     ("COLOR", "Per Color", "One object per fill color (shared, gap-free borders)"),
     ("SHAPE", "Per Shape", "One object per SVG element / traced layer"),
@@ -49,7 +50,7 @@ class MeshOptions:
         description="Maximum deviation from the true curve, relative to the object size. "
         "Lower = rounder curves with more vertices",
     )
-    separate: EnumProperty(name="Objects", items=SEPARATE_ITEMS, default="ONE")
+    separate: EnumProperty(name="Objects", items=SEPARATE_ITEMS, default="AUTO")
     overlap: EnumProperty(
         name="Overlaps",
         items=[
@@ -58,9 +59,15 @@ class MeshOptions:
         ],
         default="VISIBLE",
     )
-    ignore_white: BoolProperty(
-        name="White = Hole", default=True,
-        description="White fills are treated as empty space (cut-outs, background rectangles)",
+    white: EnumProperty(
+        name="White",
+        items=[
+            ("AUTO", "White: Background Only", "Remove white that touches the outside (background rectangles, "
+             "also where it shows through letter holes); keep enclosed white such as eyes or white letters"),
+            ("HOLE", "White: Always a Hole", "Every white area is empty space (cut-outs for engraving)"),
+            ("KEEP", "White: Keep", "White areas are solid like every other color"),
+        ],
+        default="AUTO",
     )
     include_strokes: BoolProperty(name="Strokes", default=True, description="Convert outlines (strokes) to geometry")
     layer_offset: FloatProperty(
@@ -79,7 +86,7 @@ class MeshOptions:
             grid_size=self.grid_size / 100.0,
             depth=self.depth if self.extrude else 0.0,
             separate=self.separate,
-            ignore_white=self.ignore_white,
+            white=self.white,
             include_strokes=self.include_strokes,
             layer_offset=self.layer_offset,
             create_materials=self.create_materials,
@@ -109,10 +116,10 @@ class MeshOptions:
             box.label(text="Shapes & Colors", icon="COLOR")
             box.prop(self, "separate", text="")
             box.prop(self, "overlap", text="")
+            box.prop(self, "white", text="")
             row = box.row()
-            row.prop(self, "ignore_white")
             row.prop(self, "include_strokes")
-            box.prop(self, "create_materials")
+            row.prop(self, "create_materials")
             if self.separate != "ONE":
                 box.prop(self, "layer_offset")
 
@@ -149,10 +156,16 @@ def _place_at_cursor(context, objects):
         o.location = loc
 
 
-def _new_collection(context, name):
+def _collect(context, objects, name):
+    """Put several objects of one import into their own collection."""
+    if len(objects) < 2:
+        return
     coll = bpy.data.collections.new(name)
     context.scene.collection.children.link(coll)
-    return coll
+    for o in objects:
+        for c in list(o.users_collection):
+            c.objects.unlink(o)
+        coll.objects.link(o)
 
 
 class _FileImport(ImportHelper):
@@ -225,21 +238,13 @@ class SVGMESH_OT_import_svg(Operator, _FileImport, MeshOptions, SizeOptions):
                 skip_effects=self.skip_effects,
                 min_opacity=self.min_opacity,
             )
-            coll = None
-            if self.separate != "ONE":
-                coll = _new_collection(context, name)
-            objs = pipeline.build_objects(context, doc.shapes, st, name, collection=coll)
+            objs = pipeline.build_objects(context, doc.shapes, st, name)
+            _collect(context, objs, name)
             if not objs:
                 self.report({"WARNING"}, "%s: no filled shapes found" % os.path.basename(path))
                 continue
             _place_at_cursor(context, objs)
             created.extend(objs)
-            colors = {pipeline.color_hex(s.fill) for s in doc.shapes if s.fill is not None}
-            if self.separate == "ONE" and len(colors) >= 4:
-                tip = "%s has %d colors - set Objects to Per Color to keep them apart" % (name, len(colors))
-                if self.ignore_white:
-                    tip += " (and turn off White = Hole for illustrations)"
-                self.report({"INFO"}, tip)
         pipeline.select_objects(context, created)
         if not created:
             return {"CANCELLED"}
@@ -398,9 +403,10 @@ class SVGMESH_OT_trace_image(Operator, _FileImport, TraceOptions, MeshOptions, S
                 except OSError as ex:
                     self.report({"ERROR"}, "Could not write SVG: %s" % ex)
             st = self.import_settings(scale_mode="FIT", target_size=self.target_size, origin=self.origin)
-            st.ignore_white = self.ignore_white and self.trace_mode == "COLORS"
-            coll = _new_collection(context, name) if self.separate != "ONE" and len(shapes) > 1 else None
-            objs = pipeline.build_objects(context, shapes, st, name, collection=coll)
+            if self.trace_mode != "COLORS":
+                st.white = "KEEP"
+            objs = pipeline.build_objects(context, shapes, st, name)
+            _collect(context, objs, name)
             _place_at_cursor(context, objs)
             created.extend(objs)
         pipeline.select_objects(context, created)
@@ -483,7 +489,7 @@ class SVGMESH_OT_curves_to_mesh(Operator, MeshOptions):
             if not shapes:
                 self.report({"WARNING"}, "%s has no closed splines" % obj.name)
                 continue
-            st = self.import_settings(scale_mode="KEEP", origin="KEEP", separate="ONE", ignore_white=False)
+            st = self.import_settings(scale_mode="KEEP", origin="KEEP", separate="ONE", white="KEEP")
             st.create_materials = False
             st.mesh.overlap = "UNION"
             # depth is given in world units; compensate the object scale
