@@ -35,6 +35,7 @@ class TraceSettings:
     fit_error: float = 0.5  # max. deviation of the fitted curve, pixels
     smoothing: float = 1.5  # contour smoothing radius in pixels
     max_resolution: int = 2048  # bigger images are downsampled first
+    work_resolution: int = 1000  # smaller images are upsampled to about this size
     keep_background: bool = False  # COLORS mode: also trace the background
 
 
@@ -88,6 +89,76 @@ def downsample(img, factor):
     img = np.pad(img, pad, mode="edge")
     h2, w2 = img.shape[0] // factor, img.shape[1] // factor
     return img.reshape(h2, factor, w2, factor, *img.shape[2:]).mean(axis=(1, 3))
+
+
+def upsample_cubic(a, factor):
+    """Smooth (cubic convolution, Keys a=-0.5) upsampling of a 2D array."""
+    if factor <= 1:
+        return a
+
+    def weights(t):
+        t = np.abs(t)
+        return np.where(t <= 1, 1.5 * t ** 3 - 2.5 * t ** 2 + 1,
+                        np.where(t < 2, -0.5 * t ** 3 + 2.5 * t ** 2 - 4 * t + 2, 0.0))
+
+    def along(arr, axis):
+        n = arr.shape[axis]
+        x = (np.arange(n * factor) + 0.5) / factor - 0.5  # output centres in input pixels
+        i0 = np.floor(x).astype(int)
+        out = 0.0
+        for k in (-1, 0, 1, 2):
+            idx = np.clip(i0 + k, 0, n - 1)
+            w = weights(x - (i0 + k))
+            taken = np.take(arr, idx, axis=axis)
+            shape = [1] * arr.ndim
+            shape[axis] = len(w)
+            out = out + taken * w.reshape(shape)
+        return out
+
+    return along(along(np.asarray(a, dtype=np.float64), 0), 1)
+
+
+def is_antialiased(field):
+    """True if edges in *field* (0..1) already have smooth, intermediate values.
+
+    Such images keep their sub-pixel information without blurring; hard-edged
+    (pixel art like) images need a little blur against stair steps.
+    """
+    f = np.asarray(field, dtype=np.float64)
+    if f.shape[0] < 3 or f.shape[1] < 3:
+        return True
+    lo, hi = np.percentile(f, 1), np.percentile(f, 99)
+    if hi - lo < 1e-6:
+        return True
+    f = (f - lo) / (hi - lo)  # judge relative to the image's own value range
+    edge = np.zeros(f.shape, dtype=bool)
+    edge[:, 1:] |= np.abs(np.diff(f, axis=1)) > 0.25
+    edge[1:, :] |= np.abs(np.diff(f, axis=0)) > 0.25
+    if edge.sum() < 20:
+        return True
+    soft = (f > 0.08) & (f < 0.92)
+    return float((soft & edge).sum()) / float(edge.sum()) > 0.3
+
+
+def detect_colors(rgba, has_alpha, max_colors=6):
+    """Number of clearly distinct colors (background included for opaque images)."""
+    alpha = rgba[..., 3]
+    rgb = rgba[..., :3]
+    data = rgb[alpha >= 0.9] if has_alpha else rgb.reshape(-1, 3)
+    if len(data) < 16:
+        return 1
+    if len(data) > 40000:
+        data = data[np.random.default_rng(2).choice(len(data), 40000, replace=False)]
+    centers = kmeans(data, max_colors)
+    labels = assign_labels(data, centers)
+    share = np.bincount(labels, minlength=len(centers)) / float(len(labels))
+    keep = []
+    for i in np.argsort(-share):
+        if share[i] < 0.04:
+            continue
+        if all(np.linalg.norm(centers[i] - centers[j]) > 0.3 for j in keep):
+            keep.append(i)
+    return max(1, len(keep))
 
 
 def border_values(a):
@@ -350,9 +421,11 @@ def contour_to_subpath(pts, settings, scale=1.0):
         for k in range(len(runs)):
             prev = k - 1
             p = runs[k][0]
-            if is_line[k] and is_line[prev]:
+            if is_line[k] and is_line[prev] and min(len(runs[k]), len(runs[prev])) >= 10:
                 x = _intersect(lines[prev], lines[k])
-                if x is not None and math.hypot(x[0] - p[0], x[1] - p[1]) < 4.0:
+                # only small corrections: the corner was rounded off, not moved
+                limit = min(3.0, 0.15 * min(len(runs[k]), len(runs[prev])) * SAMPLE)
+                if x is not None and math.hypot(x[0] - p[0], x[1] - p[1]) < limit:
                     p = x
             corner_pos.append(p)
         for k, run in enumerate(runs):
@@ -376,26 +449,39 @@ def contour_to_subpath(pts, settings, scale=1.0):
 # --------------------------------------------------------------------------
 
 
-def build_layers(rgba, s):
-    """Return a list of (field, iso, rgb_color, name)."""
+def build_layers(rgba, s, up=1):
+    """Return a list of (field, iso, rgb_color, name).
+
+    Fields are computed at the image resolution and then upsampled by *up*.
+    """
     rgb = rgba[..., :3]
     alpha = rgba[..., 3]
     has_alpha = float(alpha.min()) < 0.5 and float((alpha < 0.5).mean()) > 0.001
     mode = s.mode
+    num_colors = int(s.num_colors)
     if mode == "AUTO":
-        mode = "ALPHA" if has_alpha else "BRIGHTNESS"
+        n = detect_colors(rgba, has_alpha)
+        if has_alpha and n >= 2:
+            mode, num_colors = "COLORS", n
+        elif not has_alpha and n >= 3:  # background + at least two colors
+            mode, num_colors = "COLORS", n
+        else:
+            mode = "ALPHA" if has_alpha else "BRIGHTNESS"
+
+    def blur(a):
+        return gaussian_blur(a, s.blur if not is_antialiased(a) else min(s.blur, 0.3))
 
     if mode == "ALPHA":
-        field = gaussian_blur(alpha, s.blur)
         iso = s.threshold if not s.auto_threshold else 0.5
+        field = blur(alpha)
         if s.invert:
             field, iso = 1.0 - field, 1.0 - iso
         color = _mean_color(rgb, field > iso)
-        return [(field, iso, color, "Alpha")]
+        return [(upsample_cubic(field, up), iso, color, "Alpha")]
 
     if mode == "BRIGHTNESS":
         lum = luminance(rgb) * alpha + (1.0 - alpha)  # composite on white
-        lum = gaussian_blur(lum, s.blur)
+        lum = blur(lum)
         thr = otsu_threshold(lum.ravel()) if s.auto_threshold else s.threshold
         field, iso = 1.0 - lum, 1.0 - thr  # dark = foreground
         invert = s.invert
@@ -406,34 +492,40 @@ def build_layers(rgba, s):
         if invert:
             field, iso = lum, thr
         color = _mean_color(rgb, field > iso)
-        return [(field, iso, color, "Shape")]
+        return [(upsample_cubic(field, up), iso, color, "Shape")]
 
     # COLORS
     opaque = alpha >= 0.5
-    data = rgb[opaque]
+    data = rgb[alpha >= 0.9] if has_alpha and np.any(alpha >= 0.9) else rgb[opaque]
     if len(data) == 0:
         return []
     sample = data
     if len(sample) > 60000:
         sample = sample[np.random.default_rng(1).choice(len(sample), 60000, replace=False)]
-    centers = kmeans(sample, max(1, int(s.num_colors)))
-    labels = np.full(alpha.shape, -1, dtype=np.int32)
-    labels[opaque] = assign_labels(data, centers)
+    centers = kmeans(sample, max(1, num_colors))
     k = len(centers)
+    labels = assign_labels(rgb.reshape(-1, 3), centers).reshape(alpha.shape)
     if has_alpha:
         background = -1
+        # soft membership: the alpha channel keeps the anti-aliasing of the edges
+        member = {c: np.where(labels == c, alpha, 0.0) for c in range(k)}
+        member[-1] = 1.0 - alpha
+        ids = list(range(k)) + [-1]
     else:
         bvals = border_values(labels)
         background = int(np.bincount(bvals, minlength=k).argmax())
-    ids = list(range(k)) + ([-1] if has_alpha else [])
-    blurred = {c: gaussian_blur((labels == c).astype(np.float64), max(s.blur, 0.5)) for c in ids}
+        member = {c: gaussian_blur((labels == c).astype(np.float64), max(s.blur, 0.5)) for c in range(k)}
+        ids = list(range(k))
+    member = {c: upsample_cubic(m, up) for c, m in member.items()}
     layers = []
     for c in range(k):
         if c == background and not s.keep_background:
             continue
-        others = [blurred[o] for o in ids if o != c]
-        field = blurred[c] - (np.max(others, axis=0) if others else 0.0)
-        area = float((labels == c).sum())
+        others = [member[o] for o in ids if o != c]
+        field = member[c] - (np.max(others, axis=0) if others else 0.0)
+        area = float(((labels == c) & opaque).sum())
+        if area <= 0:
+            continue
         hexcol = "#%02x%02x%02x" % tuple(int(round(v * 255)) for v in np.clip(centers[c], 0, 1))
         layers.append((area, field, 0.0, tuple(float(v) for v in centers[c]), "Color " + hexcol))
     layers.sort(key=lambda t: -t[0])  # big areas first, details painted on top
@@ -466,15 +558,25 @@ def trace_image(rgba, settings=None):
     if s.max_resolution and max(h, w) > s.max_resolution:
         factor = int(math.ceil(max(h, w) / float(s.max_resolution)))
         rgba = downsample(rgba, factor)
+    # Small anti-aliased images (typical web logos) are traced at a higher
+    # working resolution, so that the pixel based settings (smoothing,
+    # corners, despeckle) stay fine compared to thin strokes and small text.
+    # Hard-edged images gain nothing from it: their stair steps would only grow.
+    up = 1
+    if s.work_resolution and max(rgba.shape[:2]) < s.work_resolution:
+        alpha = rgba[..., 3]
+        has_alpha = float(alpha.min()) < 0.5 and float((alpha < 0.5).mean()) > 0.001
+        if is_antialiased(alpha if has_alpha else luminance(rgba[..., :3])):
+            up = min(8, int(math.ceil(s.work_resolution / float(max(rgba.shape[:2])))))
 
     shapes = []
-    min_area = s.despeckle / float(factor * factor)
-    for field, iso, color, name in build_layers(rgba, s):
+    min_area = max(s.despeckle, 0.5)  # in working pixels
+    for field, iso, color, name in build_layers(rgba, s, up=up):
         subpaths = []
         for c in marching_squares(field, iso):
-            if abs(signed_area(c.tolist())) < max(min_area, 0.5):
+            if abs(signed_area(c.tolist())) < min_area:
                 continue
-            sp = contour_to_subpath(c, s, scale=float(factor))
+            sp = contour_to_subpath(c, s, scale=float(factor) / up)
             if sp is not None:
                 subpaths.append(sp)
         if subpaths:

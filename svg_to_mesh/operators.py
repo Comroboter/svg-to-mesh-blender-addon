@@ -25,6 +25,13 @@ TOPOLOGY_ITEMS = [
 ]
 
 
+SEPARATE_ITEMS = [
+    ("ONE", "Single Object", "Merge everything into one mesh"),
+    ("COLOR", "Per Color", "One object per fill color (shared, gap-free borders)"),
+    ("SHAPE", "Per Shape", "One object per SVG element / traced layer"),
+]
+
+
 class MeshOptions:
     topology: EnumProperty(name="Topology", items=TOPOLOGY_ITEMS, default="NGON")
     grid_size: FloatProperty(
@@ -42,15 +49,7 @@ class MeshOptions:
         description="Maximum deviation from the true curve, relative to the object size. "
         "Lower = rounder curves with more vertices",
     )
-    separate: EnumProperty(
-        name="Objects",
-        items=[
-            ("ONE", "Single Object", "Merge everything into one mesh"),
-            ("COLOR", "Per Color", "One object per fill color (shared, gap-free borders)"),
-            ("SHAPE", "Per Shape", "One object per SVG element / traced layer"),
-        ],
-        default="ONE",
-    )
+    separate: EnumProperty(name="Objects", items=SEPARATE_ITEMS, default="ONE")
     overlap: EnumProperty(
         name="Overlaps",
         items=[
@@ -248,7 +247,7 @@ class TraceOptions:
     trace_mode: EnumProperty(
         name="Mode",
         items=[
-            ("AUTO", "Auto", "Transparency if the image has some, otherwise brightness"),
+            ("AUTO", "Auto", "Several colors are traced separately; otherwise transparency or brightness"),
             ("BRIGHTNESS", "Brightness", "Dark vs. light (single color logo)"),
             ("ALPHA", "Transparency", "Opaque pixels become the shape"),
             ("COLORS", "Colors", "Separate the image into color regions"),
@@ -265,7 +264,8 @@ class TraceOptions:
     keep_background: BoolProperty(name="Keep Background", default=False)
     blur: FloatProperty(
         name="Edge Smoothing", default=0.8, min=0.0, max=5.0,
-        description="Blur radius (pixels) applied before tracing; removes jaggies and noise",
+        description="Blur radius (pixels) against jaggies and noise. Only hard-edged images are blurred "
+        "fully; smooth (anti-aliased) images keep their detail",
     )
     smoothing: FloatProperty(
         name="Curve Smoothing", default=1.5, min=0.0, max=10.0,
@@ -281,7 +281,8 @@ class TraceOptions:
     )
     despeckle: FloatProperty(
         name="Despeckle", default=12.0, min=0.0, max=10000.0,
-        description="Remove specks and holes smaller than this area (pixels²)",
+        description="Remove specks and holes smaller than this area (pixels² of the working image; "
+        "small images are enlarged to about 1000 pixels first)",
     )
     max_resolution: IntProperty(
         name="Max Resolution", default=2048, min=64, max=16384,
@@ -335,6 +336,9 @@ class SVGMESH_OT_trace_image(Operator, _FileImport, TraceOptions, MeshOptions, S
     bl_idname = "import_mesh.image_trace"
     bl_label = "Trace Image to Mesh"
     bl_options = {"REGISTER", "UNDO", "PRESET"}
+
+    # traced logos usually have several colors: keep them apart by default
+    separate: EnumProperty(name="Objects", items=SEPARATE_ITEMS, default="COLOR")
 
     filter_glob: StringProperty(
         default="*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.tif;*.tiff;*.webp;*.exr;*.hdr;*.gif",

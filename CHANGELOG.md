@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0
+
+- Much better tracing of small images such as logos from websites: anti-aliased images under about 1000 pixels are enlarged internally first, so thin lines, small text and letter holes survive instead of turning into zigzags or disappearing.
+- Anti-aliased images are no longer blurred (that broke hair-thin lines); hard-edged images are still smoothed.
+- **Auto** mode now detects images with several colors and traces each color separately, and *Trace Image to Mesh* creates one object per color by default.
+- Safer corner sharpening on short edges (no more spikes).
+
 ## 1.1.1
 
 - New logo, also shown in the sidebar panel header and the import menu.

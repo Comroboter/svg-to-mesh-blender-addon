@@ -297,3 +297,33 @@ def test_non_finite_numbers_do_not_spoil_other_shapes():
     polys = [p for s in doc.shapes for p in shape_to_polys(s, 0.01)]
     assert len(polys) == 1
     assert poly_area(polys) == pytest.approx(100)
+
+
+def _antialiased_logo(w=160, h=48, ss=8):
+    """Small transparent two-color logo, rendered with 8x supersampling (anti-aliased)."""
+    yy, xx = np.mgrid[0:h * ss, 0:w * ss] / ss
+    red = np.hypot(xx - 24, yy - 24) < 14  # disc
+    ring = np.abs(np.hypot(xx - 24, yy - 24) - 19) < 0.6  # 1.2 px thin ring
+    bar = (np.abs(xx - 100) < 40) & (np.abs(yy - 24) < 4)  # bar with a 2 px hole
+    hole = (np.abs(xx - 100) < 1) & (np.abs(yy - 24) < 1)
+    blue = ring | (bar & ~hole)
+    rgba = np.zeros((h * ss, w * ss, 4))
+    rgba[red] = (0.9, 0.1, 0.15, 1.0)
+    rgba[blue] = (0.1, 0.2, 0.45, 1.0)
+    return rgba.reshape(h, ss, w, ss, 4).mean(axis=(1, 3))
+
+
+def test_small_antialiased_logo_keeps_colors_thin_lines_and_holes():
+    shapes, w, h = trace_image(_antialiased_logo(), TraceSettings())  # AUTO
+    assert (w, h) == (160, 48)
+    by_color = {tuple(round(c, 1) for c in s.fill): s for s in shapes}
+    assert set(by_color) == {(0.9, 0.1, 0.2), (0.1, 0.2, 0.4)} or len(shapes) == 2
+    red = max(shapes, key=lambda s: s.fill[0])
+    blue = min(shapes, key=lambda s: s.fill[0])
+    assert len(red.subpaths) == 1
+    # thin ring (outer + inner contour) and the bar with its small hole
+    assert len(blue.subpaths) == 4
+    areas = sorted(abs(signed_area(flatten_subpath(sp, 0.01))) for sp in blue.subpaths)
+    assert areas[0] == pytest.approx(4.0, rel=0.5)  # the 2 x 2 px hole survives
+    red_area = abs(signed_area(flatten_subpath(red.subpaths[0], 0.01)))
+    assert red_area == pytest.approx(math.pi * 14 ** 2, rel=0.03)

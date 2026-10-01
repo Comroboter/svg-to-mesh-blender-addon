@@ -113,13 +113,14 @@ To use the AI suggestions, open *Edit > Preferences > Add-ons > SVG to Clean Mes
 
 Tracing runs entirely inside the add-on (only numpy, which ships with Blender). No external programs such as Inkscape or potrace are needed:
 
-1. Find the foreground: transparency, brightness (Otsu threshold, background detected automatically) or k-means color clusters.
-2. Light blur against pixel stairs and noise.
-3. Marching squares with sub-pixel accuracy, which also makes use of the image's anti-aliasing.
-4. Remove specks, detect corners, smooth the contours.
-5. Straight edges are recognized as exact lines, and the corners between them are sharpened again by intersecting the lines.
-6. Curves are fitted with Bezier fitting (Schneider's algorithm). A square becomes 4 segments, a circle a few smooth curves.
-7. Optionally **save as SVG**; from there the same mesh pipeline as the SVG import is used.
+1. Find the foreground: transparency, brightness (Otsu threshold, background detected automatically) or k-means color clusters. *Auto* picks the color mode by itself when the image has several distinct colors.
+2. Small, smooth images (for example logos saved from a website) are enlarged internally to about 1000 pixels, so hair-thin lines, small text and letter holes survive.
+3. Hard-edged images get a light blur against pixel stairs; smooth images keep all their detail.
+4. Marching squares with sub-pixel accuracy, which also makes use of the image's anti-aliasing.
+5. Remove specks, detect corners, smooth the contours.
+6. Straight edges are recognized as exact lines, and the corners between them are sharpened again by intersecting the lines.
+7. Curves are fitted with Bezier fitting (Schneider's algorithm). A square becomes 4 segments, a circle a few smooth curves.
+8. Optionally **save as SVG**; from there the same mesh pipeline as the SVG import is used.
 
 Multi-colored images are split into one mesh per color:
 
@@ -165,7 +166,7 @@ The panel lives in the **3D Viewport > Sidebar (N) > "SVG Mesh" tab**. Alternati
 | White = Hole | White areas become holes or are ignored |
 | Layer Offset | Z offset between separated objects |
 | Size | Scale to a size (*Fit*) or use the real document size (*Real*, e.g. mm from the SVG) |
-| **Tracing:** Mode | Auto / Brightness / Transparency / Colors |
+| **Tracing:** Mode | Auto (detects several colors) / Brightness / Transparency / Colors |
 | Edge Smoothing / Curve Smoothing | Smoothing against pixel stairs and noise |
 | Fit Tolerance | How closely the Bezier curves follow the pixels (px) |
 | Corner Angle | Direction changes sharper than this become corners |
