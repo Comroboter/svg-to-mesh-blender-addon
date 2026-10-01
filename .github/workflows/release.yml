@@ -1,0 +1,54 @@
+name: Release
+
+# Publish a release with the installable add-on ZIP.
+# Trigger: push a tag "v<version>" matching blender_manifest.toml, or run manually.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install system libraries needed by the bpy module
+        run: sudo apt-get update && sudo apt-get install -y libxrender1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libsm6 libgl1
+      - name: Install Python dependencies
+        run: pip install pytest numpy bpy==5.0.1
+      - name: Run tests
+        run: python -m pytest -v
+
+      - name: Build add-on ZIP
+        id: build
+        run: |
+          python build.py
+          echo "version=$(python build.py --version)" >> "$GITHUB_OUTPUT"
+      - name: Check that the tag matches the manifest version
+        if: github.ref_type == 'tag'
+        run: test "$GITHUB_REF_NAME" = "v${{ steps.build.outputs.version }}"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.build.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: SVG to Clean Mesh v${{ steps.build.outputs.version }}
+          files: dist/svg_to_mesh-${{ steps.build.outputs.version }}.zip
+          fail_on_unmatched_files: true
+          body: |
+            Import SVG files and trace images (logos) into clean, manifold meshes that are ready for booleans.
+
+            ## Installation
+            1. Download **svg_to_mesh-${{ steps.build.outputs.version }}.zip** below (do not unzip it).
+            2. **Blender 4.2+:** *Edit → Preferences → Get Extensions → ⌄ (top right) → Install from Disk…*
+               **Blender 3.6 – 4.1:** *Edit → Preferences → Add-ons → Install…*, then enable the add-on.
+            3. Open the 3D Viewport sidebar (**N**) → **SVG Mesh** tab, or use *File → Import*.
+
+            See the [README](https://github.com/${{ github.repository }}#readme) for usage and options.

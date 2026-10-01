@@ -1,5 +1,7 @@
 """Build an installable add-on ZIP: ``python build.py`` -> dist/svg_to_mesh-<version>.zip
 
+``python build.py --version`` prints the version from the manifest.
+
 The ZIP contains the ``svg_to_mesh`` folder, so it can be installed both as
 an extension (Blender 4.2+, "Install from Disk") and as a legacy add-on
 (Blender 3.6 - 4.1, Preferences > Add-ons > Install).
@@ -7,15 +9,23 @@ an extension (Blender 4.2+, "Install from Disk") and as a legacy add-on
 
 import os
 import re
+import sys
 import zipfile
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PKG = "svg_to_mesh"
 
 
-def main():
+def get_version():
     with open(os.path.join(ROOT, PKG, "blender_manifest.toml"), encoding="utf-8") as fh:
-        version = re.search(r'^version\s*=\s*"([^"]+)"', fh.read(), re.M).group(1)
+        return re.search(r'^version\s*=\s*"([^"]+)"', fh.read(), re.M).group(1)
+
+
+def main():
+    if "--version" in sys.argv:
+        print(get_version())
+        return
+    version = get_version()
     os.makedirs(os.path.join(ROOT, "dist"), exist_ok=True)
     out = os.path.join(ROOT, "dist", "%s-%s.zip" % (PKG, version))
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:

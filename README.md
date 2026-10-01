@@ -1,138 +1,145 @@
 # SVG to Clean Mesh – Blender Add-on
 
-Importiert **SVG-Dateien direkt als saubere Meshes** und verwandelt **Bilder (z. B. Logos) automatisch in Vektoren und Meshes** – mit Geometrie, die sich gut weiterverarbeiten lässt, vor allem für **Booleans** (Gravieren, Prägen, Ausschneiden).
+Import **SVG files directly as clean meshes** and **trace images (e.g. logos) automatically into vectors and meshes**, with geometry that is pleasant to work with, especially for **booleans** (engraving, embossing, cutting).
 
-![Vergleich: Blender-Standardweg vs. Add-on](docs/compare_svg.png)
+![Comparison: Blender's default workflow vs. this add-on](docs/compare_svg.png)
 
-*Links: Blenders Standardweg (SVG als Kurven importieren und dann „Convert to Mesh"): gestapelte, überlappende Ebenen, Splitter-Dreiecke, doppelte Vertices. Mitte/rechts: dieses Add-on, entweder als minimale N-Gons oder als gleichmäßiges Quad-Netz.*
+*Left: Blender's default workflow (import the SVG as curves, then "Convert to Mesh"): stacked overlapping layers, sliver triangles, duplicate vertices. Middle/right: this add-on, either as minimal n-gons or as an even quad grid.*
 
-## Das Problem
+**[⬇ Download the latest release](../../releases/latest)**
 
-Blender importiert SVGs nur als Kurven. Wandelt man sie in Meshes um, entstehen:
+## The problem
 
-- lange, dünne Splitter-Dreiecke und Dreiecksfächer,
-- jede Form als eigene, übereinanderliegende Fläche (weiße Flächen werden als Geometrie mitimportiert statt als Loch),
-- doppelte Vertices und offene, nicht-manifold Kanten,
-- keine Dicke. Extrudiert man über die Kurve, gibt es oft kaputte Normalen.
+Blender only imports SVGs as curves. Converting them to meshes gives you:
 
-Für Booleans ist das ungünstig: Der Exact-Solver wird langsam oder liefert Artefakte.
+- long, thin sliver triangles and triangle fans,
+- every shape as its own surface stacked on top of the others (white areas become geometry instead of holes),
+- duplicate vertices and open, non-manifold edges,
+- no thickness, and extruding through the curve often leaves broken normals.
 
-## Was das Add-on macht
+That is bad news for booleans: the Exact solver gets slow or produces artifacts.
 
-| Funktion | Beschreibung |
+## What the add-on does
+
+| Feature | Description |
 |---|---|
-| **Import SVG as Mesh** | Liest das SVG selbst (Pfade inkl. Bögen, Rechtecke, Kreise, Polygone, Gruppen, Transforms, CSS-Klassen, `<use>`, Strokes) und erzeugt direkt ein Mesh. |
-| **Trace Image to Mesh** | Vektorisiert PNG/JPG/… automatisch, entweder einfarbig (Helligkeit/Transparenz) oder mehrfarbig (Farb-Clustering). Optional wird ein SVG gespeichert. |
-| **Curves to Clean Mesh** | Wandelt vorhandene Kurven- und **Text-Objekte** in saubere Meshes um, z. B. bereits importierte SVGs. |
-| **Boolean-Helfer** | Setzt die ausgewählten Objekte mit einem Klick als Boolean-Cutter (Gravieren/Prägen) auf das aktive Objekt. |
+| **Import SVG as Mesh** | Reads the SVG itself (paths incl. arcs, rectangles, circles, polygons, groups, transforms, CSS classes, `<use>`, strokes) and builds a mesh directly. |
+| **Trace Image to Mesh** | Vectorizes PNG/JPG/… automatically, either single-color (brightness/transparency) or multi-color (color clustering). Can also save the result as SVG. |
+| **Curves to Clean Mesh** | Converts existing curve and **text objects** (e.g. SVGs you already imported) into clean meshes. |
+| **Boolean helper** | Uses the selected objects as boolean cutters (engrave/emboss) on the active object with a single click. |
 
-### Saubere Geometrie
+### Clean geometry
 
-- **Geschlossen und manifold.** Extrudierte Objekte sind wasserdichte Körper mit korrekt nach außen zeigenden Normalen.
-- **Keine Überlappungen, keine doppelten Vertices.** Alle Formen werden gemeinsam trianguliert, Schnittpunkte also exakt aufgelöst.
-- **Füllregeln wie im SVG** (`nonzero`/`evenodd`). Löcher in Buchstaben (O, A, B …) werden korrekt erkannt.
-- **„Was man sieht"**: Formen, die weiter oben liegen, schneiden darunterliegende aus. **Weiß wird als Loch behandelt**, z. B. weiße Schrift auf rotem Kreis. Das ist optional.
-- **Adaptive Kurvenauflösung.** Starke Krümmungen bekommen mehr Punkte, gerade Strecken keine überflüssigen.
-- **Vier Topologien zur Wahl:**
-  - **Clean N-Gons**: minimale Geometrie, eine Deckfläche pro Region und Quads an den Seiten. **Ideal für Booleans.**
-  - **Triangles**: Constrained-Delaunay-Triangulierung ohne Splitter-Fächer.
-  - **Uniform Triangles**: gleich große Dreiecke für Displacement, Cloth und Deformation.
-  - **Quads**: quad-dominantes Gitter für Subdivision und Sculpting.
-- Optional **ein Objekt pro Farbe**. Die Grenzen benachbarter Farben passen lückenlos aufeinander. Dazu Materialien aus den SVG-Farben, Ebenen-Versatz in Z und planare UVs.
+- **Closed and manifold.** Extruded objects are watertight solids with outward-facing normals.
+- **No overlaps, no duplicate vertices.** All shapes are triangulated together, so intersections are resolved exactly.
+- **Fill rules as in the SVG** (`nonzero`/`evenodd`). Holes in letters (O, A, B …) are detected correctly.
+- **"What you see"**: shapes painted on top cut away what lies below them. **White is treated as a hole**, e.g. white text on a red circle. This is optional.
+- **Adaptive curve resolution.** Tight curves get more points, straight lines get none they don't need.
+- **Four topologies to choose from:**
+  - **Clean N-Gons**: minimal geometry, one cap face per region and quads on the sides. **Ideal for booleans.**
+  - **Triangles**: constrained Delaunay triangulation without sliver fans.
+  - **Uniform Triangles**: evenly sized triangles for displacement, cloth and deformation.
+  - **Quads**: quad-dominant grid for subdivision and sculpting.
+- Optionally **one object per color**. The borders between neighbouring colors match exactly, without gaps. Materials are created from the SVG colors; Z offset between layers and planar UVs are available too.
 
-### Bild → Vektor → Mesh
+### Image → vector → mesh
 
-![Bild-Tracing](docs/trace_demo.png)
+![Image tracing](docs/trace_demo.png)
 
-Die Vektorisierung läuft komplett im Add-on (nur numpy, das bei Blender dabei ist). Externe Programme wie Inkscape oder potrace werden nicht benötigt:
+Tracing runs entirely inside the add-on (only numpy, which ships with Blender). No external programs such as Inkscape or potrace are needed:
 
-1. Vordergrund bestimmen: Transparenz, Helligkeit (Otsu-Schwelle, Hintergrund wird automatisch erkannt) oder k-Means-Farbcluster.
-2. Leichter Weichzeichner gegen Treppenstufen und Rauschen.
-3. Marching Squares mit Subpixel-Genauigkeit. Die Kantenglättung des Bildes wird dabei mitgenutzt.
-4. Kleine Flecken entfernen, Ecken erkennen, Konturen glätten.
-5. Gerade Kanten werden als exakte Linien erkannt, Ecken dazwischen per Geradenschnitt wieder spitz gemacht.
-6. Kurven werden mit Bézier-Fitting (Schneider-Algorithmus) angepasst. Ein Quadrat ergibt also 4 Segmente, ein Kreis wenige glatte Kurven.
-7. Optional als **SVG speichern**, danach geht es in dieselbe Mesh-Pipeline wie beim SVG-Import.
+1. Find the foreground: transparency, brightness (Otsu threshold, background detected automatically) or k-means color clusters.
+2. Light blur against pixel stairs and noise.
+3. Marching squares with sub-pixel accuracy, which also makes use of the image's anti-aliasing.
+4. Remove specks, detect corners, smooth the contours.
+5. Straight edges are recognized as exact lines, and the corners between them are sharpened again by intersecting the lines.
+6. Curves are fitted with Bézier fitting (Schneider's algorithm). A square becomes 4 segments, a circle a few smooth curves.
+7. Optionally **save as SVG**; from there the same mesh pipeline as the SVG import is used.
 
 ## Installation
 
-1. ZIP bauen (oder aus den Releases laden):
-   ```bash
-   python build.py        # erzeugt dist/svg_to_mesh-1.0.0.zip
-   ```
+1. Download `svg_to_mesh-<version>.zip` from the [Releases](../../releases) page (or build it yourself with `python build.py`; the ZIP ends up in `dist/`).
 2. In Blender:
-   - **Blender 4.2 und neuer:** *Edit → Preferences → Get Extensions → ⌄ (oben rechts) → Install from Disk…* → ZIP wählen
-   - **Blender 3.6 – 4.1:** *Edit → Preferences → Add-ons → Install…* → ZIP wählen → Häkchen setzen
+   - **Blender 4.2 and newer:** *Edit → Preferences → Get Extensions → ⌄ (top right) → Install from Disk…* → choose the ZIP
+   - **Blender 3.6 – 4.1:** *Edit → Preferences → Add-ons → Install…* → choose the ZIP → enable the checkbox
 
-Getestet mit Blender 5.0. Mindestversion ist 3.6.
+Tested with Blender 5.0. Minimum version is 3.6.
 
-## Benutzung
+## Usage
 
-Das Panel findest du in der **3D-Ansicht → Seitenleiste (N) → Tab „SVG Mesh"**. Alternativ:
+The panel lives in the **3D Viewport → Sidebar (N) → "SVG Mesh" tab**. Alternatively:
 
-- *File → Import → SVG as Clean Mesh (.svg)* bzw. *Image Trace to Mesh*
-- **Drag & Drop** einer `.svg` in die 3D-Ansicht (ab Blender 4.1; Blender fragt dann, welcher Importer verwendet werden soll)
-- *Object → Convert → Clean Mesh (from Curve/Text)* für vorhandene Kurven und Texte
+- *File → Import → SVG as Clean Mesh (.svg)* or *Image Trace to Mesh*
+- **Drag & drop** an `.svg` into the 3D Viewport (Blender 4.1+; Blender asks which importer to use)
+- *Object → Convert → Clean Mesh (from Curve/Text)* for existing curves and text
 
-> **Tipp:** Nach dem Import kannst du mit **F9** (bzw. dem Panel „Adjust Last Operation" unten links) alle Einstellungen live ändern, etwa Schwelle, Farben, Topologie oder Tiefe. Das Ergebnis wird sofort neu berechnet.
+> **Tip:** After importing, press **F9** (or open the "Adjust Last Operation" panel at the bottom left) to change every setting live, such as threshold, colors, topology or depth. The result is rebuilt immediately.
 
-### Logo in ein Objekt gravieren (Beispiel-Workflow)
+### Engraving a logo into an object (example workflow)
 
-1. *Import SVG as Mesh* (oder *Trace Image to Mesh*), Topologie **Clean N-Gons**, **Extrude** an, **Center Depth** an
-2. Logo auf der Oberfläche positionieren, sodass es durch die Oberfläche ragt
-3. Logo auswählen, dann mit Shift das Zielobjekt anklicken (es ist jetzt aktiv)
-4. Seitenleiste → **Cut** (Gravieren) oder **Add** (Prägen)
-5. Der Cutter wird als Drahtgitter versteckt und bleibt editierbar. Mit „Apply Immediately" wird der Modifier direkt angewendet.
+1. *Import SVG as Mesh* (or *Trace Image to Mesh*) with topology **Clean N-Gons**, **Extrude** on and **Center Depth** on
+2. Place the logo on the surface so that it pokes through it
+3. Select the logo, then Shift-click the target object (it is now active)
+4. Sidebar → **Cut** (engrave) or **Add** (emboss)
+5. The cutter is hidden as wireframe and stays editable. With "Apply Immediately" the modifier is applied right away.
 
-### Wichtige Optionen
+### Main options
 
-| Option | Bedeutung |
+| Option | Meaning |
 |---|---|
-| Topology | N-Gons / Triangles / Uniform Triangles / Quads (siehe oben) |
-| Grid Size | Zellgröße für Uniform/Quads, relativ zur Objektgröße |
-| Curve Precision | Max. Abweichung von der echten Kurve (in % der Größe). Kleiner = runder |
-| Extrude / Depth / Center Depth | Dicke des Körpers, optional symmetrisch um Z=0 |
-| Objects | Ein Objekt / pro Farbe / pro Form |
-| Overlaps | *Visible Only* (wie das SVG aussieht) oder *Union* (jede Form vollständig) |
-| White = Hole | Weiße Flächen werden zu Löchern bzw. ignoriert |
-| Size | Auf Größe skalieren (*Fit*) oder echte Dokumentgröße (*Real*, z. B. mm aus dem SVG) |
+| Topology | N-Gons / Triangles / Uniform Triangles / Quads (see above) |
+| Grid Size | Cell size for Uniform/Quads, relative to the object size |
+| Curve Precision | Maximum deviation from the true curve (in % of the size). Smaller = rounder |
+| Extrude / Depth / Center Depth | Thickness of the solid, optionally symmetric around Z=0 |
+| Objects | Single object / per color / per shape |
+| Overlaps | *Visible Only* (how the SVG looks) or *Union* (every shape complete) |
+| White = Hole | White areas become holes or are ignored |
+| Size | Scale to a size (*Fit*) or use the real document size (*Real*, e.g. mm from the SVG) |
 | **Tracing:** Mode | Auto / Brightness / Transparency / Colors |
-| Edge Smoothing / Curve Smoothing | Glättung gegen Pixeltreppen und Rauschen |
-| Fit Tolerance | Wie genau die Bézierkurven den Pixeln folgen (px) |
-| Corner Angle | Ab welchem Knickwinkel eine Ecke entsteht |
-| Despeckle | Kleinere Flecken und Löcher (px²) werden entfernt |
-| Save SVG | Vektorisiertes Ergebnis zusätzlich als SVG speichern |
+| Edge Smoothing / Curve Smoothing | Smoothing against pixel stairs and noise |
+| Fit Tolerance | How closely the Bézier curves follow the pixels (px) |
+| Corner Angle | Direction changes sharper than this become corners |
+| Despeckle | Specks and holes smaller than this (px²) are removed |
+| Save SVG | Also save the traced vectors as an SVG file |
 
-## Grenzen
+## Limitations
 
-- SVG-`<text>` wird nicht unterstützt. Text vorher in Pfade umwandeln (Inkscape: *Pfad → Objekt in Pfad*) oder Blender-Text mit *Curves to Clean Mesh* verwenden.
-- Verläufe werden zur Farbe ihres ersten Stopps. `clipPath`, `mask`, Filter und Strichelungen (`stroke-dasharray`) werden ignoriert.
-- Das Tracing ist für Logos, Icons und Grafiken mit klaren Farbflächen gedacht, nicht für Fotos.
+- SVG `<text>` is not supported. Convert text to paths first (Inkscape: *Path → Object to Path*) or use Blender text with *Curves to Clean Mesh*.
+- Gradients become the color of their first stop. `clipPath`, `mask`, filters and dashes (`stroke-dasharray`) are ignored.
+- Tracing is meant for logos, icons and graphics with clear color areas, not for photos.
 
-## Technik (für Interessierte)
+## How it works
 
 ```
-SVG ──parser──┐
-Bild ─tracer──┼─► Bézier-Formen ─► adaptive Unterteilung ─► Polygone
-Kurve/Text ───┘                                                │
-            Constrained Delaunay (alle Formen gemeinsam) ◄─────┘
-            Windungszahl je Dreieck per Flood-Fill (Füllregel, Sichtbarkeit, Gruppen)
-            Randkonturen je Objekt extrahieren und bereinigen
-            ├─ N-Gons (CDT mit Lochauflösung)
-            ├─ Dreiecke / gleichmäßig (CDT + Steiner-Gitter)
-            └─ Quads (+ Dreiecke zu Quads verbinden, glätten)
-            Extrusion zu geschlossenem Körper, UVs, Materialien
+SVG ─────parser─┐
+Image ───tracer─┼─► Bézier shapes ─► adaptive subdivision ─► polygons
+Curve/Text ─────┘                                                │
+          Constrained Delaunay (all shapes together) ◄───────────┘
+          Winding number per triangle via flood fill (fill rule, visibility, groups)
+          Extract and clean boundary loops per object
+          ├─ N-gons (CDT with hole resolution)
+          ├─ Triangles / uniform (CDT + Steiner grid)
+          └─ Quads (+ join triangles into quads, smooth)
+          Extrude into a closed solid, UVs, materials
 ```
 
-- `svg_to_mesh/core/` ist reines Python ohne `bpy` und damit außerhalb von Blender testbar: SVG-Parser, Geometrie und Strokes, Tracer, Bézier-Fit, SVG-Writer.
-- `svg_to_mesh/mesh_builder.py` enthält Triangulierung und Mesh-Aufbau (`mathutils`, `bmesh`).
-- `svg_to_mesh/pipeline.py`, `operators.py` und `ui.py` binden alles an Blender an.
+- `svg_to_mesh/core/` is plain Python without `bpy`, so it can be tested outside Blender: SVG parser, geometry and strokes, tracer, Bézier fitting, SVG writer.
+- `svg_to_mesh/mesh_builder.py` contains the triangulation and mesh construction (`mathutils`, `bmesh`).
+- `svg_to_mesh/pipeline.py`, `operators.py` and `ui.py` connect everything to Blender.
 
-## Entwicklung & Tests
+## Development & tests
 
 ```bash
-pip install pytest numpy bpy   # bpy = Blender als Python-Modul (für die Integrationstests)
+pip install pytest numpy bpy   # bpy = Blender as a Python module (for the integration tests)
 python -m pytest
 ```
 
-Die Tests in `tests/test_blender.py` laufen mit dem `bpy`-Modul gegen echtes Blender und prüfen unter anderem, ob die Körper manifold sind, ob das Volumen stimmt und ob Booleans funktionieren. Ohne `bpy` werden sie übersprungen.
+The tests in `tests/test_blender.py` run against real Blender through the `bpy` module and check, among other things, that the solids are manifold, that volumes are correct and that booleans work. Without `bpy` they are skipped.
+
+### Making a release
+
+Push a tag such as `v1.0.1` (the version in `svg_to_mesh/blender_manifest.toml` must match), or start the **Release** workflow manually under *Actions*. It runs the tests, builds the ZIP and publishes it as a GitHub release.
+
+## License
+
+GPL-3.0-or-later (as required for Blender add-ons).

@@ -1,0 +1,20 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install system libraries needed by the bpy module
+        run: sudo apt-get update && sudo apt-get install -y libxrender1 libxxf86vm1 libxfixes3 libxi6 libxkbcommon0 libsm6 libgl1
+      - name: Install Python dependencies
+        run: pip install pytest numpy bpy==5.0.1
+      - name: Run tests (core + Blender integration)
+        run: python -m pytest -v
